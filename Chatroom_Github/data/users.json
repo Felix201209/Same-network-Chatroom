@@ -1,0 +1,14 @@
+{
+  "super-admin-001": {
+    "odp": "super-admin-001",
+    "username": "SuperAdmin",
+    "password": "7cb2ccf3ac2e26f27249a2efe237e93a8688e0a5f92628d16ee0e2febd4e2fe0",
+    "nickname": "SuperAdmin",
+    "avatar": null,
+    "signature": "系统管理员",
+    "role": "SUPER_ADMIN",
+    "createdAt": "2025-12-10T12:21:16.052Z",
+    "friends": [],
+    "groups": []
+  }
+}

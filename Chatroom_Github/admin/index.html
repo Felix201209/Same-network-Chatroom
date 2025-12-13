@@ -1,0 +1,1135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>聊天室管理后台</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      min-height: 100vh;
+    }
+    
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 20px;
+      border-radius: 12px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    header h1 {
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    
+    .stat-card {
+      background: #16213e;
+      padding: 20px;
+      border-radius: 12px;
+      text-align: center;
+    }
+    
+    .stat-card i {
+      font-size: 24px;
+      margin-bottom: 10px;
+      color: #667eea;
+    }
+    
+    .stat-card .value {
+      font-size: 28px;
+      font-weight: bold;
+      color: #fff;
+    }
+    
+    .stat-card .label {
+      font-size: 12px;
+      color: #888;
+      margin-top: 5px;
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    
+    .tab-btn {
+      background: #16213e;
+      border: none;
+      color: #888;
+      padding: 12px 24px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.3s;
+    }
+    
+    .tab-btn:hover {
+      background: #1f2b4d;
+    }
+    
+    .tab-btn.active {
+      background: #667eea;
+      color: #fff;
+    }
+    
+    .panel {
+      display: none;
+      background: #16213e;
+      border-radius: 12px;
+      padding: 20px;
+    }
+    
+    .panel.active {
+      display: block;
+    }
+    
+    .panel h2 {
+      margin-bottom: 20px;
+      font-size: 18px;
+      color: #667eea;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #2a2a4a;
+    }
+    
+    th {
+      color: #888;
+      font-weight: 500;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    
+    tr:hover {
+      background: #1f2b4d;
+    }
+    
+    .badge {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    
+    .badge-online {
+      background: #10b981;
+      color: #fff;
+    }
+    
+    .badge-offline {
+      background: #6b7280;
+      color: #fff;
+    }
+    
+    .badge-banned {
+      background: #ef4444;
+      color: #fff;
+    }
+    
+    .badge-muted {
+      background: #f59e0b;
+      color: #fff;
+    }
+    
+    .role-badge {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    
+    .action-btn {
+      background: none;
+      border: 1px solid #444;
+      color: #888;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      margin-right: 5px;
+      transition: all 0.3s;
+    }
+    
+    .action-btn:hover {
+      border-color: #667eea;
+      color: #667eea;
+    }
+    
+    .action-btn.danger:hover {
+      border-color: #ef4444;
+      color: #ef4444;
+    }
+    
+    .action-btn.success:hover {
+      border-color: #10b981;
+      color: #10b981;
+    }
+    
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.8);
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    
+    .modal.active {
+      display: flex;
+    }
+    
+    .modal-content {
+      background: #16213e;
+      padding: 30px;
+      border-radius: 12px;
+      width: 90%;
+      max-width: 500px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    
+    .modal-content h3 {
+      margin-bottom: 20px;
+      color: #667eea;
+    }
+    
+    .form-group {
+      margin-bottom: 15px;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 5px;
+      color: #888;
+      font-size: 14px;
+    }
+    
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #2a2a4a;
+      border-radius: 8px;
+      background: #1a1a2e;
+      color: #fff;
+      font-size: 14px;
+    }
+    
+    .form-group input:focus,
+    .form-group select:focus,
+    .form-group textarea:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    .form-row {
+      display: flex;
+      gap: 10px;
+    }
+    
+    .form-row .form-group {
+      flex: 1;
+    }
+    
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.3s;
+    }
+    
+    .btn-primary {
+      background: #667eea;
+      color: #fff;
+    }
+    
+    .btn-primary:hover {
+      background: #5a6fd6;
+    }
+    
+    .btn-secondary {
+      background: #2a2a4a;
+      color: #fff;
+    }
+    
+    .btn-danger {
+      background: #ef4444;
+      color: #fff;
+    }
+    
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 20px;
+    }
+    
+    .chat-list {
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    
+    .chat-item {
+      padding: 15px;
+      border-bottom: 1px solid #2a2a4a;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    
+    .chat-item:hover {
+      background: #1f2b4d;
+    }
+    
+    .chat-item h4 {
+      font-size: 14px;
+      margin-bottom: 5px;
+    }
+    
+    .chat-item p {
+      font-size: 12px;
+      color: #888;
+    }
+    
+    .message-list {
+      max-height: 500px;
+      overflow-y: auto;
+      padding: 10px;
+      background: #1a1a2e;
+      border-radius: 8px;
+    }
+    
+    .message-item {
+      padding: 10px;
+      margin-bottom: 10px;
+      background: #16213e;
+      border-radius: 8px;
+    }
+    
+    .message-item .sender {
+      font-size: 12px;
+      color: #667eea;
+      margin-bottom: 5px;
+    }
+    
+    .message-item .content {
+      font-size: 14px;
+    }
+    
+    .message-item .time {
+      font-size: 11px;
+      color: #666;
+      margin-top: 5px;
+    }
+    
+    .search-box {
+      margin-bottom: 20px;
+    }
+    
+    .search-box input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #2a2a4a;
+      border-radius: 8px;
+      background: #1a1a2e;
+      color: #fff;
+      font-size: 14px;
+    }
+    
+    .permission-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    
+    .permission-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 10px;
+      background: #1a1a2e;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    
+    .permission-item input {
+      width: auto;
+    }
+    
+    .refresh-btn {
+      background: #667eea;
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    
+    .refresh-btn:hover {
+      background: #5a6fd6;
+    }
+    
+    @media (max-width: 768px) {
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      
+      table {
+        font-size: 12px;
+      }
+      
+      th, td {
+        padding: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1><i class="fas fa-shield-alt"></i> 聊天室管理后台</h1>
+      <button class="refresh-btn" onclick="loadStats()"><i class="fas fa-sync-alt"></i> 刷新</button>
+    </header>
+    
+    <div class="stats-grid">
+      <div class="stat-card">
+        <i class="fas fa-users"></i>
+        <div class="value" id="totalUsers">0</div>
+        <div class="label">总用户数</div>
+      </div>
+      <div class="stat-card">
+        <i class="fas fa-circle" style="color: #10b981;"></i>
+        <div class="value" id="onlineUsers">0</div>
+        <div class="label">在线用户</div>
+      </div>
+      <div class="stat-card">
+        <i class="fas fa-comments"></i>
+        <div class="value" id="totalRooms">0</div>
+        <div class="label">群聊数量</div>
+      </div>
+      <div class="stat-card">
+        <i class="fas fa-envelope"></i>
+        <div class="value" id="totalMessages">0</div>
+        <div class="label">消息总数</div>
+      </div>
+      <div class="stat-card">
+        <i class="fas fa-ban"></i>
+        <div class="value" id="bannedUsers">0</div>
+        <div class="label">封禁用户</div>
+      </div>
+      <div class="stat-card">
+        <i class="fas fa-volume-mute"></i>
+        <div class="value" id="mutedUsers">0</div>
+        <div class="label">禁言用户</div>
+      </div>
+    </div>
+    
+    <div class="tabs">
+      <button class="tab-btn active" onclick="showPanel('users')"><i class="fas fa-users"></i> 用户管理</button>
+      <button class="tab-btn" onclick="showPanel('messages')"><i class="fas fa-comments"></i> 消息记录</button>
+      <button class="tab-btn" onclick="showPanel('rooms')"><i class="fas fa-door-open"></i> 群聊管理</button>
+      <button class="tab-btn" onclick="showPanel('roles')"><i class="fas fa-user-tag"></i> 角色管理</button>
+    </div>
+    
+    <!-- 用户管理 -->
+    <div class="panel active" id="usersPanel">
+      <h2>用户列表</h2>
+      <div class="search-box">
+        <input type="text" id="userSearch" placeholder="搜索用户..." oninput="filterUsers()">
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>用户名</th>
+            <th>昵称</th>
+            <th>角色</th>
+            <th>状态</th>
+            <th>注册时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="userTableBody">
+        </tbody>
+      </table>
+    </div>
+    
+    <!-- 消息记录 -->
+    <div class="panel" id="messagesPanel">
+      <h2>聊天记录</h2>
+      <div style="display: grid; grid-template-columns: 300px 1fr; gap: 20px;">
+        <div>
+          <h4 style="margin-bottom: 10px; color: #888;">聊天列表</h4>
+          <div class="chat-list" id="chatList"></div>
+        </div>
+        <div>
+          <h4 style="margin-bottom: 10px; color: #888;">消息详情</h4>
+          <div class="message-list" id="messageList">
+            <p style="color: #666; text-align: center; padding: 20px;">选择一个聊天查看消息</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 群聊管理 -->
+    <div class="panel" id="roomsPanel">
+      <h2>群聊列表</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>群名称</th>
+            <th>群主</th>
+            <th>成员数</th>
+            <th>创建时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="roomTableBody">
+        </tbody>
+      </table>
+    </div>
+    
+    <!-- 角色管理 -->
+    <div class="panel" id="rolesPanel">
+      <h2>角色管理</h2>
+      <button class="btn btn-primary" onclick="showCreateRoleModal()" style="margin-bottom: 20px;">
+        <i class="fas fa-plus"></i> 创建新角色
+      </button>
+      <table>
+        <thead>
+          <tr>
+            <th>角色名</th>
+            <th>等级</th>
+            <th>徽章</th>
+            <th>权限</th>
+            <th>类型</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="roleTableBody">
+        </tbody>
+      </table>
+    </div>
+  </div>
+  
+  <!-- 封禁弹窗 -->
+  <div class="modal" id="banModal">
+    <div class="modal-content">
+      <h3><i class="fas fa-ban"></i> 封禁用户</h3>
+      <input type="hidden" id="banUserOdp">
+      <p style="margin-bottom: 15px;">用户: <strong id="banUserName"></strong></p>
+      <div class="form-group">
+        <label>封禁原因</label>
+        <textarea id="banReason" rows="3" placeholder="请输入封禁原因..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>封禁时长</label>
+        <select id="banDuration">
+          <option value="3600000">1小时</option>
+          <option value="86400000">1天</option>
+          <option value="604800000">7天</option>
+          <option value="2592000000">30天</option>
+          <option value="permanent">永久</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('banModal')">取消</button>
+        <button class="btn btn-danger" onclick="confirmBan()">确认封禁</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 禁言弹窗 -->
+  <div class="modal" id="muteModal">
+    <div class="modal-content">
+      <h3><i class="fas fa-volume-mute"></i> 禁言用户</h3>
+      <input type="hidden" id="muteUserOdp">
+      <p style="margin-bottom: 15px;">用户: <strong id="muteUserName"></strong></p>
+      <div class="form-group">
+        <label>禁言原因</label>
+        <textarea id="muteReason" rows="3" placeholder="请输入禁言原因..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>禁言时长</label>
+        <select id="muteDuration">
+          <option value="300000">5分钟</option>
+          <option value="1800000">30分钟</option>
+          <option value="3600000">1小时</option>
+          <option value="86400000">1天</option>
+          <option value="permanent">永久</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('muteModal')">取消</button>
+        <button class="btn btn-danger" onclick="confirmMute()">确认禁言</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 设置角色弹窗 -->
+  <div class="modal" id="roleModal">
+    <div class="modal-content">
+      <h3><i class="fas fa-user-tag"></i> 设置角色</h3>
+      <input type="hidden" id="roleUserOdp">
+      <p style="margin-bottom: 15px;">用户: <strong id="roleUserName"></strong></p>
+      <div class="form-group">
+        <label>选择角色</label>
+        <select id="roleSelect"></select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('roleModal')">取消</button>
+        <button class="btn btn-primary" onclick="confirmSetRole()">确认</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 修改密码弹窗 -->
+  <div class="modal" id="passwordModal">
+    <div class="modal-content">
+      <h3><i class="fas fa-key"></i> 修改用户密码</h3>
+      <input type="hidden" id="passwordUserOdp">
+      <p style="margin-bottom: 15px;">用户: <strong id="passwordUserName"></strong></p>
+      <div class="form-group">
+        <label>新密码</label>
+        <input type="password" id="newPasswordInput" placeholder="输入新密码（至少6位）">
+      </div>
+      <div class="form-group">
+        <label>确认密码</label>
+        <input type="password" id="confirmPasswordInput" placeholder="再次输入新密码">
+      </div>
+      <p style="color: #f59e0b; font-size: 12px; margin-bottom: 10px;">
+        <i class="fas fa-exclamation-triangle"></i> 修改密码后，该用户将被强制下线
+      </p>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('passwordModal')">取消</button>
+        <button class="btn btn-primary" onclick="confirmChangePassword()">确认修改</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 创建角色弹窗 -->
+  <div class="modal" id="createRoleModal">
+    <div class="modal-content">
+      <h3><i class="fas fa-plus"></i> 创建新角色</h3>
+      <div class="form-group">
+        <label>角色名称</label>
+        <input type="text" id="newRoleName" placeholder="例如: VIP_PLUS">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>颜色</label>
+          <input type="color" id="newRoleColor" value="#667eea">
+        </div>
+        <div class="form-group">
+          <label>等级 (0-99)</label>
+          <input type="number" id="newRoleLevel" value="10" min="0" max="99">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>徽章显示</label>
+        <input type="text" id="newRoleBadge" placeholder="例如: 🌟 高级会员">
+      </div>
+      <div class="form-group">
+        <label>权限</label>
+        <div class="permission-list">
+          <label class="permission-item">
+            <input type="checkbox" value="ban"> 封禁
+          </label>
+          <label class="permission-item">
+            <input type="checkbox" value="mute"> 禁言
+          </label>
+          <label class="permission-item">
+            <input type="checkbox" value="view_chats"> 查看聊天
+          </label>
+          <label class="permission-item">
+            <input type="checkbox" value="manage_users"> 管理用户
+          </label>
+          <label class="permission-item">
+            <input type="checkbox" value="manage_rooms"> 管理群聊
+          </label>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('createRoleModal')">取消</button>
+        <button class="btn btn-primary" onclick="confirmCreateRole()">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let allUsers = [];
+    let allRoles = { builtIn: {}, custom: {} };
+    
+    // 加载统计数据
+    async function loadStats() {
+      try {
+        const res = await fetch('/api/stats');
+        const stats = await res.json();
+        document.getElementById('totalUsers').textContent = stats.users;
+        document.getElementById('onlineUsers').textContent = stats.online;
+        document.getElementById('totalRooms').textContent = stats.rooms;
+        document.getElementById('totalMessages').textContent = stats.messages;
+        document.getElementById('bannedUsers').textContent = stats.banned;
+        document.getElementById('mutedUsers').textContent = stats.muted;
+      } catch (e) {
+        console.error('加载统计失败:', e);
+      }
+    }
+    
+    // 加载用户列表
+    async function loadUsers() {
+      try {
+        const res = await fetch('/api/users');
+        allUsers = await res.json();
+        renderUsers(allUsers);
+      } catch (e) {
+        console.error('加载用户失败:', e);
+      }
+    }
+    
+    function renderUsers(users) {
+      const tbody = document.getElementById('userTableBody');
+      tbody.innerHTML = users.map(u => `
+        <tr>
+          <td>${escapeHtml(u.username)}</td>
+          <td>${escapeHtml(u.nickname)}</td>
+          <td>
+            <span class="role-badge" style="background: ${u.roleInfo?.color || '#666'}; color: #fff;">
+              ${u.roleInfo?.badge || u.role}
+            </span>
+          </td>
+          <td>
+            ${u.online ? '<span class="badge badge-online">在线</span>' : '<span class="badge badge-offline">离线</span>'}
+            ${u.banned ? '<span class="badge badge-banned">已封禁</span>' : ''}
+            ${u.muted ? '<span class="badge badge-muted">已禁言</span>' : ''}
+          </td>
+          <td>${new Date(u.createdAt).toLocaleString()}</td>
+          <td>
+            ${u.role !== 'SUPER_ADMIN' ? `
+              ${u.banned ? 
+                `<button class="action-btn success" onclick="unbanUser('${u.odp}')">解封</button>` :
+                `<button class="action-btn danger" onclick="showBanModal('${u.odp}', '${escapeHtml(u.nickname)}')">封禁</button>`
+              }
+              ${u.muted ?
+                `<button class="action-btn success" onclick="unmuteUser('${u.odp}')">解禁</button>` :
+                `<button class="action-btn danger" onclick="showMuteModal('${u.odp}', '${escapeHtml(u.nickname)}')">禁言</button>`
+              }
+              <button class="action-btn" onclick="showRoleModal('${u.odp}', '${escapeHtml(u.nickname)}', '${u.role}')">设置角色</button>
+              <button class="action-btn" onclick="showPasswordModal('${u.odp}', '${escapeHtml(u.nickname)}')" title="修改密码">🔑</button>
+              <button class="action-btn danger" onclick="deleteUser('${u.odp}', '${escapeHtml(u.nickname)}')" title="删除用户">🗑️</button>
+            ` : '<span style="color: #888;">-</span>'}
+          </td>
+        </tr>
+      `).join('');
+    }
+    
+    function filterUsers() {
+      const query = document.getElementById('userSearch').value.toLowerCase();
+      const filtered = allUsers.filter(u => 
+        u.username.toLowerCase().includes(query) || 
+        u.nickname.toLowerCase().includes(query)
+      );
+      renderUsers(filtered);
+    }
+    
+    // 加载聊天列表
+    async function loadChats() {
+      try {
+        const res = await fetch('/api/messages');
+        const chats = await res.json();
+        const chatList = document.getElementById('chatList');
+        chatList.innerHTML = chats.map(c => `
+          <div class="chat-item" onclick="loadChatMessages('${c.chatId}')">
+            <h4>${c.chatId}</h4>
+            <p>${c.messageCount} 条消息</p>
+          </div>
+        `).join('');
+      } catch (e) {
+        console.error('加载聊天列表失败:', e);
+      }
+    }
+    
+    async function loadChatMessages(chatId) {
+      try {
+        const res = await fetch(`/api/messages?chatId=${encodeURIComponent(chatId)}&limit=200`);
+        const messages = await res.json();
+        const messageList = document.getElementById('messageList');
+        messageList.innerHTML = messages.map(m => `
+          <div class="message-item">
+            <div class="sender">${escapeHtml(m.senderName || m.senderId)}</div>
+            <div class="content">${escapeHtml(m.content)}</div>
+            <div class="time">${new Date(m.timestamp).toLocaleString()}</div>
+          </div>
+        `).join('');
+      } catch (e) {
+        console.error('加载消息失败:', e);
+      }
+    }
+    
+    // 加载群聊列表
+    async function loadRooms() {
+      try {
+        const res = await fetch('/api/rooms');
+        const rooms = await res.json();
+        const tbody = document.getElementById('roomTableBody');
+        tbody.innerHTML = rooms.map(r => `
+          <tr>
+            <td>${escapeHtml(r.name)}</td>
+            <td>${r.owner}</td>
+            <td>${r.members?.length || 0}</td>
+            <td>${new Date(r.createdAt).toLocaleString()}</td>
+            <td>
+              <button class="action-btn" onclick="loadChatMessages('room_${r.id}')">查看消息</button>
+            </td>
+          </tr>
+        `).join('');
+      } catch (e) {
+        console.error('加载群聊失败:', e);
+      }
+    }
+    
+    // 加载角色列表
+    async function loadRoles() {
+      try {
+        const res = await fetch('/api/roles');
+        allRoles = await res.json();
+        renderRoles();
+        updateRoleSelect();
+      } catch (e) {
+        console.error('加载角色失败:', e);
+      }
+    }
+    
+    function renderRoles() {
+      const tbody = document.getElementById('roleTableBody');
+      const allRolesList = [
+        ...Object.entries(allRoles.builtIn).map(([k, v]) => ({ ...v, key: k, isBuiltIn: true })),
+        ...Object.entries(allRoles.custom).map(([k, v]) => ({ ...v, key: k, isBuiltIn: false }))
+      ];
+      
+      tbody.innerHTML = allRolesList.map(r => `
+        <tr>
+          <td style="color: ${r.color}">${r.key}</td>
+          <td>${r.level}</td>
+          <td>${r.badge || '-'}</td>
+          <td>${r.permissions?.join(', ') || '-'}</td>
+          <td>${r.isBuiltIn ? '内置' : '自定义'}</td>
+          <td>
+            ${!r.isBuiltIn ? `<button class="action-btn danger" onclick="deleteRole('${r.key}')">删除</button>` : '-'}
+          </td>
+        </tr>
+      `).join('');
+    }
+    
+    function updateRoleSelect() {
+      const select = document.getElementById('roleSelect');
+      const allRolesList = [
+        ...Object.entries(allRoles.builtIn).filter(([k]) => k !== 'SUPER_ADMIN'),
+        ...Object.entries(allRoles.custom)
+      ];
+      select.innerHTML = allRolesList.map(([k, v]) => 
+        `<option value="${k}">${v.badge || k}</option>`
+      ).join('');
+    }
+    
+    // 显示面板
+    function showPanel(panel) {
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById(panel + 'Panel').classList.add('active');
+      event.target.classList.add('active');
+      
+      if (panel === 'users') loadUsers();
+      if (panel === 'messages') loadChats();
+      if (panel === 'rooms') loadRooms();
+      if (panel === 'roles') loadRoles();
+    }
+    
+    // 弹窗操作
+    function showBanModal(odp, name) {
+      document.getElementById('banUserOdp').value = odp;
+      document.getElementById('banUserName').textContent = name;
+      document.getElementById('banModal').classList.add('active');
+    }
+    
+    function showMuteModal(odp, name) {
+      document.getElementById('muteUserOdp').value = odp;
+      document.getElementById('muteUserName').textContent = name;
+      document.getElementById('muteModal').classList.add('active');
+    }
+    
+    function showRoleModal(odp, name, currentRole) {
+      document.getElementById('roleUserOdp').value = odp;
+      document.getElementById('roleUserName').textContent = name;
+      document.getElementById('roleSelect').value = currentRole;
+      document.getElementById('roleModal').classList.add('active');
+    }
+    
+    function showPasswordModal(odp, name) {
+      document.getElementById('passwordUserOdp').value = odp;
+      document.getElementById('passwordUserName').textContent = name;
+      document.getElementById('newPasswordInput').value = '';
+      document.getElementById('confirmPasswordInput').value = '';
+      document.getElementById('passwordModal').classList.add('active');
+    }
+    
+    function showCreateRoleModal() {
+      document.getElementById('createRoleModal').classList.add('active');
+    }
+    
+    function closeModal(id) {
+      document.getElementById(id).classList.remove('active');
+    }
+    
+    // API 操作
+    async function confirmBan() {
+      const odp = document.getElementById('banUserOdp').value;
+      const reason = document.getElementById('banReason').value;
+      const durationValue = document.getElementById('banDuration').value;
+      
+      try {
+        await fetch('/api/ban', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            odp,
+            reason,
+            permanent: durationValue === 'permanent',
+            duration: durationValue !== 'permanent' ? parseInt(durationValue) : null
+          })
+        });
+        closeModal('banModal');
+        loadUsers();
+        loadStats();
+      } catch (e) {
+        alert('操作失败');
+      }
+    }
+    
+    async function unbanUser(odp) {
+      if (!confirm('确定要解封该用户吗？')) return;
+      try {
+        await fetch('/api/unban', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ odp })
+        });
+        loadUsers();
+        loadStats();
+      } catch (e) {
+        alert('操作失败');
+      }
+    }
+    
+    async function confirmMute() {
+      const odp = document.getElementById('muteUserOdp').value;
+      const reason = document.getElementById('muteReason').value;
+      const durationValue = document.getElementById('muteDuration').value;
+      
+      try {
+        await fetch('/api/mute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            odp,
+            reason,
+            permanent: durationValue === 'permanent',
+            duration: durationValue !== 'permanent' ? parseInt(durationValue) : null
+          })
+        });
+        closeModal('muteModal');
+        loadUsers();
+        loadStats();
+      } catch (e) {
+        alert('操作失败');
+      }
+    }
+    
+    async function unmuteUser(odp) {
+      if (!confirm('确定要解除禁言吗？')) return;
+      try {
+        await fetch('/api/unmute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ odp })
+        });
+        loadUsers();
+        loadStats();
+      } catch (e) {
+        alert('操作失败');
+      }
+    }
+    
+    async function confirmSetRole() {
+      const odp = document.getElementById('roleUserOdp').value;
+      const role = document.getElementById('roleSelect').value;
+      
+      try {
+        await fetch('/api/setRole', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ odp, role })
+        });
+        closeModal('roleModal');
+        loadUsers();
+      } catch (e) {
+        alert('操作失败');
+      }
+    }
+    
+    async function confirmChangePassword() {
+      const odp = document.getElementById('passwordUserOdp').value;
+      const newPassword = document.getElementById('newPasswordInput').value;
+      const confirmPassword = document.getElementById('confirmPasswordInput').value;
+      
+      if (!newPassword || newPassword.length < 6) {
+        alert('密码长度至少6位');
+        return;
+      }
+      
+      if (newPassword !== confirmPassword) {
+        alert('两次输入的密码不一致');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/changePassword', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ odp, newPassword })
+        });
+        const result = await res.json();
+        if (result.success) {
+          alert(result.message || '密码修改成功');
+          closeModal('passwordModal');
+        } else {
+          alert(result.error || '操作失败');
+        }
+      } catch (e) {
+        alert('操作失败');
+      }
+    }
+    
+    async function confirmCreateRole() {
+      const name = document.getElementById('newRoleName').value.trim();
+      const color = document.getElementById('newRoleColor').value;
+      const level = parseInt(document.getElementById('newRoleLevel').value);
+      const badge = document.getElementById('newRoleBadge').value;
+      const permissions = Array.from(document.querySelectorAll('#createRoleModal .permission-item input:checked'))
+        .map(cb => cb.value);
+      
+      if (!name) {
+        alert('请输入角色名称');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/roles/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, color, level, badge, permissions })
+        });
+        
+        if (!res.ok) {
+          const err = await res.json();
+          alert(err.error);
+          return;
+        }
+        
+        closeModal('createRoleModal');
+        loadRoles();
+      } catch (e) {
+        alert('创建失败');
+      }
+    }
+    
+    async function deleteRole(name) {
+      if (!confirm(`确定要删除角色 "${name}" 吗？使用该角色的用户将被重置为普通用户。`)) return;
+      
+      try {
+        await fetch(`/api/roles/${name}`, { method: 'DELETE' });
+        loadRoles();
+        loadUsers();
+      } catch (e) {
+        alert('删除失败');
+      }
+    }
+    
+    async function deleteUser(odp, nickname) {
+      if (!confirm(`⚠️ 确定要永久删除用户 "${nickname}" 吗？\n\n此操作不可恢复，将删除该用户的所有数据！`)) return;
+      
+      try {
+        const res = await fetch(`/api/users/${odp}`, { method: 'DELETE' });
+        
+        if (!res.ok) {
+          const err = await res.json();
+          alert('删除失败: ' + err.error);
+          return;
+        }
+        
+        alert('用户已删除');
+        loadStats();
+        loadUsers();
+      } catch (e) {
+        alert('删除失败');
+      }
+    }
+    
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+    
+    // 初始化
+    loadStats();
+    loadUsers();
+    loadRoles();
+    
+    // 自动刷新
+    setInterval(loadStats, 30000);
+  </script>
+</body>
+</html>
