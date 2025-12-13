@@ -2262,8 +2262,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('\n========================================');
   console.log('🚀 聊天室服务器已启动!');
   console.log('========================================');
-  console.log(`📍 本机访问: http://localhost:${PORT}`);
-  console.log(`📍 局域网访问: http://${localIP}:${PORT}`);
+  console.log(`📍 本机管理员专属访问: http://localhost:${PORT}`);
+  console.log(`📍 其他人局域网访问: http://${localIP}:${PORT}`);
   console.log('========================================');
   console.log(`📁 数据目录: ${dataDir}`);
   console.log(`👥 已注册用户: ${Object.keys(registeredUsers).length}`);
