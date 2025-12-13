@@ -15,7 +15,7 @@ git clone https://github.com/yourname/Chatroom_Github.git
 # Enter the project folder
 cd your_path/Chatroom_Github
 
-# Install dependencies
+# Install dependencies if the given one have errors
 npm install
 
 # Start the server
