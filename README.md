@@ -2,6 +2,19 @@
 
 A lightweight local-network chatroom that connects users through **IP + Port**, supporting both **Chinese** and **English**.
 
+## 🎯 Why This Project Exists
+
+In many environments such as schools, libraries, offices, or dormitories,  
+mobile phone usage is restricted or internet access is unavailable.
+
+This project provides a simple solution:
+
+✅ A chatroom that works **entirely within the same local network**  
+✅ No internet required  
+✅ No phone required  
+✅ Works on laptops, desktops, Raspberry Pi, etc.  
+✅ Perfect for classrooms, group work, LAN parties, and offline communication
+
 ---
 
 ## 🚀 Getting Started
