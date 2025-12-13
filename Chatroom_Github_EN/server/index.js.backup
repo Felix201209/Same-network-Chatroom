@@ -1,0 +1,779 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
+const os = require('os');
+const crypto = require('crypto');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  maxHttpBufferSize: 100 * 1024 * 1024
+});
+
+const PORT = process.env.PORT || 3000;
+
+// ===== 数据存储路径 =====
+const dataDir = path.join(__dirname, '../data');
+const uploadsDir = path.join(__dirname, '../uploads');
+const avatarsDir = path.join(uploadsDir, 'avatars');
+const filesDir = path.join(uploadsDir, 'files');
+const voicesDir = path.join(uploadsDir, 'voices');
+const imagesDir = path.join(uploadsDir, 'images');
+const videosDir = path.join(uploadsDir, 'videos');
+
+// 创建所有必要的目录
+[dataDir, uploadsDir, avatarsDir, filesDir, voicesDir, imagesDir, videosDir].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
+
+// ===== 数据文件路径 =====
+const usersFile = path.join(dataDir, 'users.json');
+const messagesFile = path.join(dataDir, 'messages.json');
+const roomsFile = path.join(dataDir, 'rooms.json');
+
+// ===== 数据存储工具函数 =====
+function loadJSON(filePath, defaultValue = {}) {
+  try {
+    if (fs.existsSync(filePath)) {
+      const data = fs.readFileSync(filePath, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (e) {
+    console.error(`加载 ${filePath} 失败:`, e);
+  }
+  return defaultValue;
+}
+
+function saveJSON(filePath, data) {
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.error(`保存 ${filePath} 失败:`, e);
+  }
+}
+
+// ===== 加载持久化数据 =====
+let registeredUsers = loadJSON(usersFile, {}); // { odp: userInfo }
+let allMessages = loadJSON(messagesFile, {}); // { chatKey: messages[] }
+let allRooms = loadJSON(roomsFile, {}); // { roomId: roomInfo }
+
+// ===== 运行时数据 =====
+const onlineSockets = new Map(); // socketId -> odp
+const userSockets = new Map(); // odp -> socketId
+
+// ===== 密码哈希 =====
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+// ===== 获取聊天ID =====
+function getChatId(odp1, odp2) {
+  return [odp1, odp2].sort().join('_');
+}
+
+// ===== 获取本机IP =====
+function getLocalIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost';
+}
+
+// ===== 配置文件上传 =====
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    let dest = filesDir;
+    if (file.mimetype.startsWith('image/')) dest = imagesDir;
+    else if (file.mimetype.startsWith('video/')) dest = videosDir;
+    else if (file.mimetype.startsWith('audio/')) dest = voicesDir;
+    cb(null, dest);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const uniqueName = `${Date.now()}-${uuidv4()}${ext}`;
+    cb(null, uniqueName);
+  }
+});
+
+const upload = multer({ 
+  storage,
+  limits: { fileSize: 100 * 1024 * 1024 }
+});
+
+// ===== Express中间件 =====
+app.use(express.static(path.join(__dirname, '../public')));
+app.use('/uploads', express.static(uploadsDir));
+app.use(express.json());
+
+// ===== 文件上传接口 =====
+app.post('/upload', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: '没有文件上传' });
+  }
+  
+  const folder = path.basename(path.dirname(req.file.path));
+  const fileUrl = `/uploads/${folder}/${req.file.filename}`;
+  res.json({
+    url: fileUrl,
+    filename: req.file.originalname,
+    mimetype: req.file.mimetype,
+    size: req.file.size
+  });
+});
+
+// 头像上传
+app.post('/upload/avatar', upload.single('avatar'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: '没有文件上传' });
+  }
+  
+  const newPath = path.join(avatarsDir, req.file.filename);
+  if (req.file.path !== newPath) {
+    fs.renameSync(req.file.path, newPath);
+  }
+  
+  res.json({
+    url: `/uploads/avatars/${req.file.filename}`
+  });
+});
+
+// ===== Socket.IO 连接处理 =====
+io.on('connection', (socket) => {
+  console.log(`[连接] ${socket.id}`);
+
+  // ===== 会话恢复 =====
+  socket.on('session:restore', (data) => {
+    const { odp, username } = data;
+    
+    if (!odp || !registeredUsers[odp]) {
+      console.log(`[会话恢复] 失败 - 用户不存在: ${username}`);
+      return socket.emit('session:fail');
+    }
+    
+    const user = registeredUsers[odp];
+    
+    // 检查是否已在线（踢掉旧连接）
+    if (userSockets.has(odp)) {
+      const oldSocketId = userSockets.get(odp);
+      if (oldSocketId !== socket.id) {
+        const oldSocket = io.sockets.sockets.get(oldSocketId);
+        if (oldSocket) {
+          oldSocket.emit('force:logout', { message: '您的账号在其他设备登录' });
+          oldSocket.disconnect();
+        }
+      }
+    }
+    
+    // 记录在线状态
+    onlineSockets.set(socket.id, odp);
+    userSockets.set(odp, socket.id);
+    
+    // 通知其他用户此用户上线
+    socket.broadcast.emit('user:online', {
+      odp: user.odp,
+      nickname: user.nickname,
+      avatar: user.avatar,
+      signature: user.signature
+    });
+    
+    console.log(`[会话恢复] ${user.nickname} (${username})`);
+    
+    socket.emit('session:restored', { 
+      user: {
+        odp: user.odp,
+        username: user.username,
+        nickname: user.nickname,
+        avatar: user.avatar,
+        signature: user.signature
+      }
+    });
+    
+    // 发送在线用户列表（排除自己）
+    sendOnlineUsers(socket, user.odp);
+    
+    // 发送群聊列表
+    sendUserRooms(socket, user.odp);
+  });
+
+  // ===== 用户注册 =====
+  socket.on('user:register', (data) => {
+    const { username, password, nickname, avatar, signature } = data;
+    
+    // 验证
+    if (!username || !password) {
+      return socket.emit('register:fail', { message: '用户名和密码不能为空' });
+    }
+    
+    if (username.length < 3 || username.length > 20) {
+      return socket.emit('register:fail', { message: '用户名长度需要3-20个字符' });
+    }
+    
+    // 用户名格式验证
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+      return socket.emit('register:fail', { message: '用户名只能包含字母、数字和下划线' });
+    }
+    
+    if (password.length < 6) {
+      return socket.emit('register:fail', { message: '密码至少需要6个字符' });
+    }
+    
+    // 密码强度验证
+    if (!/[a-zA-Z]/.test(password)) {
+      return socket.emit('register:fail', { message: '密码需要包含至少一个字母' });
+    }
+    
+    if (!/[0-9]/.test(password)) {
+      return socket.emit('register:fail', { message: '密码需要包含至少一个数字' });
+    }
+    
+    // 检查用户名是否已存在
+    const existingUser = Object.values(registeredUsers).find(u => u.username === username);
+    if (existingUser) {
+      return socket.emit('register:fail', { message: '用户名已被注册' });
+    }
+    
+    // 创建用户
+    const odp = uuidv4();
+    const user = {
+      odp,
+      username,
+      password: hashPassword(password),
+      nickname: nickname || username,
+      avatar: avatar || null,
+      signature: signature || '',
+      createdAt: new Date().toISOString(),
+      friends: [],
+      groups: []
+    };
+    
+    registeredUsers[odp] = user;
+    saveJSON(usersFile, registeredUsers);
+    
+    // 记录在线状态
+    onlineSockets.set(socket.id, user.odp);
+    userSockets.set(user.odp, socket.id);
+    
+    console.log(`[注册] ${user.nickname} (${username})`);
+    
+    socket.emit('register:success', { 
+      user: {
+        odp: user.odp,
+        username: user.username,
+        nickname: user.nickname,
+        avatar: user.avatar,
+        signature: user.signature
+      }
+    });
+    
+    // 通知其他用户新用户上线
+    socket.broadcast.emit('user:online', {
+      odp: user.odp,
+      nickname: user.nickname,
+      avatar: user.avatar,
+      signature: user.signature
+    });
+    
+    // 发送在线用户列表
+    sendOnlineUsers(socket, user.odp);
+  });
+
+  // ===== 用户登录 =====
+  socket.on('user:login', (data) => {
+    const { username, password } = data;
+    
+    if (!username || !password) {
+      return socket.emit('login:fail', { message: '请输入用户名和密码' });
+    }
+    
+    // 查找用户
+    const user = Object.values(registeredUsers).find(u => u.username === username);
+    if (!user) {
+      return socket.emit('login:fail', { message: '用户不存在' });
+    }
+    
+    // 验证密码
+    if (user.password !== hashPassword(password)) {
+      return socket.emit('login:fail', { message: '密码错误' });
+    }
+    
+    // 检查是否已在线（踢掉旧连接）
+    if (userSockets.has(user.odp)) {
+      const oldSocketId = userSockets.get(user.odp);
+      const oldSocket = io.sockets.sockets.get(oldSocketId);
+      if (oldSocket) {
+        oldSocket.emit('force:logout', { message: '您的账号在其他设备登录' });
+        oldSocket.disconnect();
+      }
+    }
+    
+    // 记录在线状态
+    onlineSockets.set(socket.id, user.odp);
+    userSockets.set(user.odp, socket.id);
+    
+    // 通知其他用户此用户上线
+    socket.broadcast.emit('user:online', {
+      odp: user.odp,
+      nickname: user.nickname,
+      avatar: user.avatar,
+      signature: user.signature
+    });
+    
+    console.log(`[登录] ${user.nickname} (${username})`);
+    
+    socket.emit('login:success', { 
+      user: {
+        odp: user.odp,
+        username: user.username,
+        nickname: user.nickname,
+        avatar: user.avatar,
+        signature: user.signature
+      }
+    });
+    
+    // 发送在线用户列表（排除自己）
+    sendOnlineUsers(socket, user.odp);
+    
+    // 发送群聊列表
+    sendUserRooms(socket, user.odp);
+  });
+
+  // ===== 获取在线用户 =====
+  socket.on('users:getOnline', () => {
+    const myodp = onlineSockets.get(socket.id);
+    if (myodp) {
+      sendOnlineUsers(socket, myodp);
+    }
+  });
+
+  // ===== 发送在线用户列表 =====
+  function sendOnlineUsers(socket, excludeodp) {
+    const onlineList = [];
+    userSockets.forEach((socketId, odp) => {
+      if (odp !== excludeodp) {
+        const user = registeredUsers[odp];
+        if (user) {
+          onlineList.push({
+            odp: user.odp,
+            nickname: user.nickname,
+            avatar: user.avatar,
+            signature: user.signature,
+            status: 'online'
+          });
+        }
+      }
+    });
+    socket.emit('users:list', onlineList);
+  }
+
+  // ===== 发送用户群聊列表 =====
+  function sendUserRooms(socket, odp) {
+    const userRooms = [];
+    Object.values(allRooms).forEach(room => {
+      if (room.members.includes(odp)) {
+        userRooms.push(room);
+        socket.join(room.id); // 加入Socket.IO房间
+      }
+    });
+    socket.emit('rooms:list', userRooms);
+  }
+
+  // ===== 私聊消息 =====
+  socket.on('message:private', (data) => {
+    const senderId = onlineSockets.get(socket.id);
+    if (!senderId) return;
+    
+    const sender = registeredUsers[senderId];
+    if (!sender) return;
+    
+    // 兼容 to 和 receiverId
+    const receiverId = data.to || data.receiverId;
+    const { type, content, filename, filesize, duration, replyTo } = data;
+    
+    if (!receiverId || !content) return;
+    
+    const message = {
+      id: uuidv4(),
+      type: type || 'text',
+      content,
+      filename,
+      filesize,
+      duration,
+      // 同时提供 from/to 和 senderId/receiverId 以兼容前端
+      from: senderId,
+      to: receiverId,
+      senderId,
+      senderName: sender.nickname,
+      senderAvatar: sender.avatar,
+      receiverId,
+      timestamp: Date.now(),
+      status: 'sent',
+      replyTo: replyTo || null
+    };
+    
+    // 保存消息
+    const chatId = getChatId(senderId, receiverId);
+    if (!allMessages[chatId]) {
+      allMessages[chatId] = [];
+    }
+    allMessages[chatId].push(message);
+    saveJSON(messagesFile, allMessages);
+    
+    // 发送给接收者
+    const receiverSocketId = userSockets.get(receiverId);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit('message:private', message);
+      message.status = 'delivered';
+    }
+    
+    // 发送给发送者自己（确保双方都能看到消息）
+    socket.emit('message:private', message);
+    
+    console.log(`[私聊] ${sender.nickname} -> ${registeredUsers[receiverId]?.nickname || receiverId}: ${type === 'text' ? content.slice(0, 20) : `[${type}]`}`);
+  });
+
+  // ===== 获取消息历史 (通用) =====
+  socket.on('messages:get', (data) => {
+    const myodp = onlineSockets.get(socket.id);
+    if (!myodp) return socket.emit('messages:history', { chatId: data?.targetId, messages: [] });
+    
+    const { type, targetId } = data;
+    
+    if (type === 'private') {
+      const chatId = getChatId(myodp, targetId);
+      const messages = allMessages[chatId] || [];
+      socket.emit('messages:history', { chatId, messages: messages.slice(-100) });
+    } else if (type === 'room') {
+      const messages = allMessages[targetId] || [];
+      socket.emit('messages:history', { chatId: targetId, messages: messages.slice(-100) });
+    }
+  });
+
+  // ===== 获取聊天历史 =====
+  socket.on('chat:getHistory', (data) => {
+    const myodp = onlineSockets.get(socket.id);
+    if (!myodp) return socket.emit('messages:history', { chatId: data?.odp, messages: [] });
+    
+    const { odp } = data;
+    const chatId = getChatId(myodp, odp);
+    const messages = allMessages[chatId] || [];
+    
+    socket.emit('messages:history', { chatId, messages: messages.slice(-100) });
+  });
+
+  // ===== 创建群聊 =====
+  socket.on('room:create', (data) => {
+    const creatorId = onlineSockets.get(socket.id);
+    if (!creatorId) return socket.emit('room:error', { message: '未登录' });
+    
+    const creator = registeredUsers[creatorId];
+    if (!creator) return socket.emit('room:error', { message: '用户不存在' });
+    
+    const { name, description, members: memberIds } = data;
+    
+    if (!name || name.trim().length === 0) {
+      return socket.emit('room:error', { message: '群名称不能为空' });
+    }
+    
+    // 确保创建者在成员列表中
+    const members = [creatorId];
+    if (memberIds && Array.isArray(memberIds)) {
+      memberIds.forEach(id => {
+        if (id !== creatorId && registeredUsers[id]) {
+          members.push(id);
+        }
+      });
+    }
+    
+    const roomId = uuidv4();
+    const room = {
+      id: roomId,
+      name: name.trim(),
+      description: description || '',
+      avatar: null,
+      creator: creatorId,
+      admins: [creatorId],
+      members,
+      createdAt: new Date().toISOString()
+    };
+    
+    allRooms[roomId] = room;
+    saveJSON(roomsFile, allRooms);
+    
+    // 初始化群消息
+    allMessages[roomId] = [];
+    saveJSON(messagesFile, allMessages);
+    
+    // 通知所有成员
+    members.forEach(memberId => {
+      const memberSocketId = userSockets.get(memberId);
+      if (memberSocketId) {
+        const memberSocket = io.sockets.sockets.get(memberSocketId);
+        if (memberSocket) {
+          memberSocket.join(roomId);
+          memberSocket.emit('room:created', room);
+        }
+      }
+    });
+    
+    console.log(`[群聊] ${creator.nickname} 创建了群 "${name}"`);
+  });
+
+  // ===== 群聊消息 =====
+  socket.on('message:room', (data) => {
+    const senderId = onlineSockets.get(socket.id);
+    if (!senderId) return;
+    
+    const sender = registeredUsers[senderId];
+    if (!sender) return;
+    
+    const { roomId, type, content, filename, filesize, duration, replyTo } = data;
+    
+    const room = allRooms[roomId];
+    if (!room || !room.members.includes(senderId)) return;
+    
+    const message = {
+      id: uuidv4(),
+      type: type || 'text',
+      content,
+      filename,
+      filesize,
+      duration,
+      senderId,
+      senderName: sender.nickname,
+      senderAvatar: sender.avatar,
+      roomId,
+      timestamp: new Date().toISOString(),
+      replyTo: replyTo || null
+    };
+    
+    // 保存消息
+    if (!allMessages[roomId]) {
+      allMessages[roomId] = [];
+    }
+    allMessages[roomId].push(message);
+    saveJSON(messagesFile, allMessages);
+    
+    // 发送给群内所有成员
+    io.to(roomId).emit('message:room', message);
+    
+    console.log(`[群聊消息] ${sender.nickname} -> ${room.name}: ${type === 'text' ? content.slice(0, 20) : `[${type}]`}`);
+  });
+
+  // ===== 获取群聊历史 =====
+  socket.on('room:getHistory', (data) => {
+    const { roomId } = data;
+    const messages = allMessages[roomId] || [];
+    socket.emit('messages:history', { chatId: roomId, messages: messages.slice(-100) });
+  });
+
+  // ===== 加入群聊房间 =====
+  socket.on('room:join', (roomId) => {
+    const odp = onlineSockets.get(socket.id);
+    if (!odp) return;
+    
+    const room = allRooms[roomId];
+    if (room && room.members.includes(odp)) {
+      socket.join(roomId);
+    }
+  });
+
+  // ===== 消息已读 =====
+  socket.on('message:read', (data) => {
+    const { chatId, messageIds } = data;
+    if (!allMessages[chatId]) return;
+    
+    messageIds.forEach(msgId => {
+      const msg = allMessages[chatId].find(m => m.id === msgId);
+      if (msg) {
+        msg.status = 'read';
+      }
+    });
+    saveJSON(messagesFile, allMessages);
+    
+    // 通知发送者
+    const myodp = onlineSockets.get(socket.id);
+    if (chatId.includes('_')) {
+      const otherodp = chatId.split('_').find(id => id !== myodp);
+      const otherSocketId = userSockets.get(otherodp);
+      if (otherSocketId) {
+        io.to(otherSocketId).emit('message:readReceipt', { chatId, messageIds });
+      }
+    }
+  });
+
+  // ===== 正在输入 =====
+  socket.on('typing:start', (data) => {
+    const senderId = onlineSockets.get(socket.id);
+    if (!senderId) return;
+    
+    const sender = registeredUsers[senderId];
+    const { receiverId, roomId } = data;
+    
+    if (roomId) {
+      socket.to(roomId).emit('typing:start', { odp: senderId, nickname: sender?.nickname, roomId });
+    } else if (receiverId) {
+      const receiverSocketId = userSockets.get(receiverId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit('typing:start', { odp: senderId, nickname: sender?.nickname });
+      }
+    }
+  });
+
+  socket.on('typing:stop', (data) => {
+    const senderId = onlineSockets.get(socket.id);
+    if (!senderId) return;
+    
+    const { receiverId, roomId } = data;
+    
+    if (roomId) {
+      socket.to(roomId).emit('typing:stop', { odp: senderId, roomId });
+    } else if (receiverId) {
+      const receiverSocketId = userSockets.get(receiverId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit('typing:stop', { odp: senderId });
+      }
+    }
+  });
+
+  // ===== 消息撤回 =====
+  socket.on('message:recall', (data) => {
+    const senderId = onlineSockets.get(socket.id);
+    if (!senderId) return;
+    
+    const { messageId, chatId, roomId } = data;
+    const key = roomId || chatId;
+    
+    if (!allMessages[key]) return;
+    
+    const msgIndex = allMessages[key].findIndex(m => m.id === messageId && m.senderId === senderId);
+    if (msgIndex === -1) return;
+    
+    // 检查时间（2分钟内可撤回）
+    const msg = allMessages[key][msgIndex];
+    const timeDiff = Date.now() - new Date(msg.timestamp).getTime();
+    if (timeDiff > 2 * 60 * 1000) {
+      socket.emit('error', { message: '超过2分钟的消息无法撤回' });
+      return;
+    }
+    
+    msg.type = 'recalled';
+    msg.content = '消息已撤回';
+    saveJSON(messagesFile, allMessages);
+    
+    if (roomId) {
+      io.to(roomId).emit('message:recalled', { messageId, roomId });
+    } else {
+      const otherodp = chatId.split('_').find(id => id !== senderId);
+      const otherSocketId = userSockets.get(otherodp);
+      if (otherSocketId) {
+        io.to(otherSocketId).emit('message:recalled', { messageId, chatId });
+      }
+      socket.emit('message:recalled', { messageId, chatId });
+    }
+  });
+
+  // ===== 更新用户资料 =====
+  socket.on('user:update', (data) => {
+    const odp = onlineSockets.get(socket.id);
+    if (!odp) return socket.emit('user:updateFail', { message: '未登录' });
+    
+    const user = registeredUsers[odp];
+    if (!user) return socket.emit('user:updateFail', { message: '用户不存在' });
+    
+    const { nickname, avatar, signature } = data;
+    
+    if (nickname !== undefined) user.nickname = nickname;
+    if (avatar !== undefined) user.avatar = avatar;
+    if (signature !== undefined) user.signature = signature;
+    
+    saveJSON(usersFile, registeredUsers);
+    
+    // 广播更新
+    socket.broadcast.emit('user:updated', {
+      odp: user.odp,
+      nickname: user.nickname,
+      avatar: user.avatar,
+      signature: user.signature
+    });
+    
+    socket.emit('user:updateSuccess', { user: {
+      odp: user.odp,
+      nickname: user.nickname,
+      avatar: user.avatar,
+      signature: user.signature
+    }});
+  });
+
+  // ===== 修改密码 =====
+  socket.on('user:changePassword', (data) => {
+    const odp = onlineSockets.get(socket.id);
+    if (!odp) return socket.emit('password:error', { message: '未登录' });
+    
+    const user = registeredUsers[odp];
+    if (!user) return socket.emit('password:error', { message: '用户不存在' });
+    
+    const { oldPassword, newPassword } = data;
+    
+    // 验证旧密码
+    if (user.password !== hashPassword(oldPassword)) {
+      return socket.emit('password:error', { message: '当前密码错误' });
+    }
+    
+    // 验证新密码
+    if (!newPassword || newPassword.length < 6) {
+      return socket.emit('password:error', { message: '新密码至少需要6个字符' });
+    }
+    
+    if (!/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
+      return socket.emit('password:error', { message: '密码需要包含字母和数字' });
+    }
+    
+    // 更新密码
+    user.password = hashPassword(newPassword);
+    saveJSON(usersFile, registeredUsers);
+    
+    console.log(`[密码修改] ${user.nickname}`);
+    socket.emit('password:changed');
+  });
+
+  // ===== 断开连接 =====
+  socket.on('disconnect', () => {
+    const odp = onlineSockets.get(socket.id);
+    if (odp) {
+      const user = registeredUsers[odp];
+      console.log(`[离线] ${user?.nickname || odp}`);
+      
+      onlineSockets.delete(socket.id);
+      userSockets.delete(odp);
+      
+      // 通知其他用户
+      socket.broadcast.emit('user:offline', { odp });
+    }
+  });
+});
+
+// ===== 启动服务器 =====
+server.listen(PORT, '0.0.0.0', () => {
+  const localIP = getLocalIP();
+  console.log('\n========================================');
+  console.log('🚀 聊天室服务器已启动!');
+  console.log('========================================');
+  console.log(`📍 本机访问: http://localhost:${PORT}`);
+  console.log(`📍 局域网访问: http://${localIP}:${PORT}`);
+  console.log('========================================');
+  console.log(`📁 数据目录: ${dataDir}`);
+  console.log(`👥 已注册用户: ${Object.keys(registeredUsers).length}`);
+  console.log(`💬 群聊数量: ${Object.keys(allRooms).length}`);
+  console.log('========================================\n');
+});
