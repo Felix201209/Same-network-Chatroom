@@ -31,6 +31,9 @@ cd your_path/Chatroom_Github
 # Install dependencies if the given one have errors
 npm install
 
+# Clean Ports
+npm run clean
+
 # Start the server
 npm start
 ```
