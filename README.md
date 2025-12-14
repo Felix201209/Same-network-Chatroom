@@ -45,6 +45,13 @@ The project is **currently in BETA**, so updates and improvements are ongoing.
 - ✅ Supports **Chinese** and **English**  
 - ✅ No external servers required  
 - ✅ Lightweight and easy to run  
+- ✅ **Admin panel** with powerful moderation tools
+
+---
+
+## 📚 Documentation
+
+- **[Admin & Moderation Guide](Admin-Moderation-Guide.md)** - Complete guide for administrators and moderators
 
 ---
 
