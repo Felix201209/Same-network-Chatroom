@@ -1,0 +1,2365 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
+const os = require('os');
+const crypto = require('crypto');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  maxHttpBufferSize: 100 * 1024 * 1024
+});
+
+const PORT = process.env.PORT || 3000;
+const ADMIN_PORT = 8001;
+
+// ===== Role and Permission Definitions =====
+const ROLES = {
+  SUPER_ADMIN: {
+    name: 'SuperAdmin',
+    level: 100,
+    color: '#FF0000',
+    badge: '👑 SuperAdmin',
+    permissions: ['all']
+  },
+  ADMIN: {
+    name: 'Admin',
+    level: 80,
+    color: '#FF6B00',
+    badge: '⭐ Admin',
+    permissions: ['ban', 'mute', 'view_chats', 'manage_users', 'manage_rooms']
+  },
+  MODERATOR: {
+    name: 'Moderator',
+    level: 50,
+    color: '#00A0FF',
+    badge: '🛡️ Writer',
+    permissions: ['mute', 'view_reports', 'manage_rooms']
+  },
+  VIP: {
+    name: 'VIP',
+    level: 20,
+    color: '#FFD700',
+    badge: '💎 VIP',
+    permissions: []
+  },
+  USER: {
+    name: 'User',
+    level: 0,
+    color: '#666666',
+    badge: '',
+    permissions: []
+  }
+};
+
+// ===== Profanity Filter System (Beta 0.1.0 Enhanced) =====
+const PROFANITY_LIST = [
+  // Chinese profanity
+  '傻逼', '操你妈', '草泥马', '你妈的', '妈的', '他妈的', '去你妈', '滚你妈',
+  '狗日的', '王八蛋', '混蛋', '畜生', '废物', '垃圾', '白痴', '智障',
+  '脑残', '弱智', '煞笔', 'sb', 'SB', '尼玛', '你麻痹', '麻痹',
+  '贱人', '婊子', '妓女', '鸡巴', '屌', '屎', '尿', '屁眼',
+  '日你', '干你', '艹', '肏', '逼', '骚货', '浪货', '死全家','滚蛋', '去死', 'ntm','nm', '鸡吧',
+  // New sensitive words
+  '傻b', '沙比', 'cnm', 'wcnm', 'nmsl', 'rnm', '你妈死', '死妈', '操你',
+  '草你', 'tmd', 'wdnmd', '法克', '卧槽', '我操', '我草', '妈逼', '牛逼',
+  // English profanity
+  'fuck', 'shit', 'bitch', 'asshole', 'dick', 'cock', 'pussy',
+  'bastard', 'damn', 'crap', 'nigger', 'nigga', 'whore', 'slut',
+  // New English sensitive words
+  'fk', 'fuk', 'fck', 'wtf', 'stfu', 'motherfucker', 'bullshit', 'dumbass'
+];
+
+// Variant detection - handle intentional misspellings
+const PROFANITY_VARIANTS = {
+  '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '@': 'a', '$': 's'
+};
+
+// Preprocess text for more accurate profanity detection
+function preprocessText(text) {
+  if (!text) return '';
+  let processed = text.toLowerCase();
+  // Replace number and symbol variants
+  for (const [variant, char] of Object.entries(PROFANITY_VARIANTS)) {
+    processed = processed.split(variant).join(char);
+  }
+  // Remove repeated characters (e.g., fuuuck -> fuck)
+  processed = processed.replace(/(.)\1{2,}/g, '$1$1');
+  return processed;
+}
+
+// Escape regex special characters
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function containsProfanity(text) {
+  if (!text) return false;
+  const lowerText = text.toLowerCase();
+  const processedText = preprocessText(text);
+  return PROFANITY_LIST.some(word => {
+    const lowerWord = word.toLowerCase();
+    // Check both original and preprocessed text
+    return lowerText.includes(lowerWord) || processedText.includes(lowerWord);
+  });
+}
+
+function filterProfanity(text) {
+  if (!text) return text;
+  let filtered = text;
+  PROFANITY_LIST.forEach(word => {
+    const regex = new RegExp(escapeRegExp(word), 'gi');
+    filtered = filtered.replace(regex, '*'.repeat(word.length));
+  });
+  return filtered;
+}
+
+// ===== Data Storage Paths =====
+const dataDir = path.join(__dirname, '../data');
+const uploadsDir = path.join(__dirname, '../uploads');
+const avatarsDir = path.join(uploadsDir, 'avatars');
+const filesDir = path.join(uploadsDir, 'files');
+const voicesDir = path.join(uploadsDir, 'voices');
+const imagesDir = path.join(uploadsDir, 'images');
+const videosDir = path.join(uploadsDir, 'videos');
+const adminDir = path.join(__dirname, '../admin');
+
+// Create all necessary directories
+[dataDir, uploadsDir, avatarsDir, filesDir, voicesDir, imagesDir, videosDir, adminDir].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
+
+// ===== Data File Paths =====
+const usersFile = path.join(dataDir, 'users.json');
+const messagesFile = path.join(dataDir, 'messages.json');
+const roomsFile = path.join(dataDir, 'rooms.json');
+const bansFile = path.join(dataDir, 'bans.json');
+const friendsFile = path.join(dataDir, 'friends.json');
+const friendRequestsFile = path.join(dataDir, 'friend_requests.json');
+const customRolesFile = path.join(dataDir, 'custom_roles.json');
+const momentsFile = path.join(dataDir, 'moments.json');
+const offlineMessagesFile = path.join(dataDir, 'offline_messages.json');
+const gamesFile = path.join(dataDir, 'games.json');
+const reportsFile = path.join(dataDir, 'reports.json');
+const warningsFile = path.join(dataDir, 'warnings.json');
+
+// ===== Data Storage Utility Functions =====
+function loadJSON(filePath, defaultValue = {}) {
+  try {
+    if (fs.existsSync(filePath)) {
+      const data = fs.readFileSync(filePath, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (e) {
+    console.error(`Failed to load ${filePath}:`, e);
+  }
+  return defaultValue;
+}
+
+function saveJSON(filePath, data) {
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.error(`Save ${filePath} Failed:`, e);
+  }
+}
+
+// ===== Load Persistent Data =====
+let registeredUsers = loadJSON(usersFile, {});
+let allMessages = loadJSON(messagesFile, {});
+let allRooms = loadJSON(roomsFile, {});
+let bans = loadJSON(bansFile, { banned: {}, muted: {} });
+let friends = loadJSON(friendsFile, {});
+let friendRequests = loadJSON(friendRequestsFile, {});
+let customRoles = loadJSON(customRolesFile, {});
+let allMoments = loadJSON(momentsFile, []);
+let offlineMessages = loadJSON(offlineMessagesFile, {});
+let activeGames = loadJSON(gamesFile, {});
+let reports = loadJSON(reportsFile, []);
+let warnings = loadJSON(warningsFile, {});
+
+// ===== Runtime Data =====
+const onlineSockets = new Map();
+const userSockets = new Map();
+
+// ===== Performance Optimization: Message Deduplication and Throttling =====
+const recentMessages = new Map(); // Store recent message hashes for deduplication
+const messageThrottle = new Map(); // Message sending throttle
+const MESSAGE_THROTTLE_MS = 100; // Minimum send interval
+const MESSAGE_CACHE_TTL = 5000; // Message cache expiration time
+
+// Generate message hash for deduplication
+function getMessageHash(senderId, content, type) {
+  return `${senderId}_${type}_${content?.substring(0, 50)}_${Math.floor(Date.now() / 1000)}`;
+}
+
+// Check for duplicate message
+function isDuplicateMessage(senderId, content, type) {
+  const hash = getMessageHash(senderId, content, type);
+  if (recentMessages.has(hash)) {
+    return true;
+  }
+  recentMessages.set(hash, Date.now());
+  // Clean expired cache
+  setTimeout(() => recentMessages.delete(hash), MESSAGE_CACHE_TTL);
+  return false;
+}
+
+// Check message throttle
+function isThrottled(senderId) {
+  const lastTime = messageThrottle.get(senderId);
+  const now = Date.now();
+  if (lastTime && (now - lastTime) < MESSAGE_THROTTLE_MS) {
+    return true;
+  }
+  messageThrottle.set(senderId, now);
+  return false;
+}
+
+// ===== Utility Functions =====
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+function getChatId(odp1, odp2) {
+  return [odp1, odp2].sort().join('_');
+}
+
+function formatRemaining(ms) {
+  if (ms <= 0) return 'Ended';
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  
+  if (days > 0) return `${days}d ${hours % 24}h`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${seconds}s`;
+}
+
+function getLocalIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost';
+}
+
+// ===== Initialize SuperAdmin =====
+function initSuperAdmin() {
+  const superAdminId = 'super-admin-001';
+  if (!registeredUsers[superAdminId]) {
+    registeredUsers[superAdminId] = {
+      odp: superAdminId,
+      username: 'SuperAdmin',
+      password: hashPassword('SuperAdmin@2024'),
+      nickname: 'SuperAdmin',
+      avatar: null,
+      signature: 'System Administrator',
+      role: 'SUPER_ADMIN',
+      createdAt: new Date().toISOString(),
+      friends: [],
+      groups: []
+    };
+    saveJSON(usersFile, registeredUsers);
+    console.log('✅ SuperAdmin account created (Password: SuperAdmin@2024)');
+  }
+}
+
+// ===== Permission Check =====
+function hasPermission(user, permission) {
+  if (!user || !user.role) return false;
+  const role = ROLES[user.role] || customRoles[user.role] || ROLES.USER;
+  return role.permissions.includes('all') || role.permissions.includes(permission);
+}
+
+function getRoleInfo(roleName) {
+  return ROLES[roleName] || customRoles[roleName] || ROLES.USER;
+}
+
+// ===== Ban Check =====
+function checkBan(odp) {
+  const ban = bans.banned[odp];
+  if (!ban) return null;
+  if (ban.permanent) return ban;
+  if (ban.until && new Date(ban.until) > new Date()) return ban;
+  delete bans.banned[odp];
+  saveJSON(bansFile, bans);
+  return null;
+}
+
+function checkMute(odp) {
+  const mute = bans.muted[odp];
+  if (!mute) return null;
+  if (mute.permanent) return mute;
+  if (mute.until && new Date(mute.until) > new Date()) return mute;
+  delete bans.muted[odp];
+  saveJSON(bansFile, bans);
+  return null;
+}
+
+// ===== Friend System =====
+function areFriends(odp1, odp2) {
+  const userFriends = friends[odp1] || [];
+  return userFriends.includes(odp2);
+}
+
+function canSendMessage(senderOdp, receiverOdp) {
+  // If friends, allow sending
+  if (areFriends(senderOdp, receiverOdp)) return { allowed: true };
+  
+  // Check if sender is admin (admins have no restrictions)
+  const sender = registeredUsers[senderOdp];
+  if (sender) {
+    const senderRole = sender.role;
+    if (senderRole === 'SUPER_ADMIN' || senderRole === 'ADMIN' || senderRole === 'MODERATOR') {
+      return { allowed: true };
+    }
+  }
+  
+  // Regular user: check if already sent message without reply
+  const chatId = getChatId(senderOdp, receiverOdp);
+  const messages = allMessages[chatId] || [];
+  const senderMessages = messages.filter(m => m.senderId === senderOdp);
+  const receiverReplied = messages.some(m => m.senderId === receiverOdp);
+  
+  if (senderMessages.length >= 1 && !receiverReplied) {
+    return { allowed: false, reason: 'The other party has not replied yet. Please wait for their reply or add them as a friend first' };
+  }
+  
+  return { allowed: true, isFirstMessage: senderMessages.length === 0 };
+}
+
+// ===== Warn User =====
+function warnUser(targetOdp, reason, adminOdp) {
+  const target = registeredUsers[targetOdp];
+  const admin = registeredUsers[adminOdp];
+  
+  if (!warnings[targetOdp]) {
+    warnings[targetOdp] = [];
+  }
+  
+  const warning = {
+    id: uuidv4(),
+    reason,
+    by: adminOdp,
+    byName: admin?.nickname,
+    createdAt: Date.now()
+  };
+  
+  warnings[targetOdp].push(warning);
+  saveJSON(warningsFile, warnings);
+  
+  // Notify the warned user
+  const targetSocketId = userSockets.get(targetOdp);
+  if (targetSocketId) {
+    io.to(targetSocketId).emit('user:warned', {
+      reason,
+      byName: admin?.nickname,
+      warningCount: warnings[targetOdp].length
+    });
+  }
+  
+  console.log(`[Warning] ${admin?.nickname} warned ${target?.nickname}: ${reason}`);
+  
+  // If warnings reach 3, auto-mute for 30 minutes
+  if (warnings[targetOdp].length >= 3) {
+    const until = Date.now() + 30 * 60 * 1000;
+    bans.muted[targetOdp] = {
+      by: 'system',
+      reason: '3 warnings accumulated, auto-muted',
+      until,
+      permanent: false
+    };
+    saveJSON(bansFile, bans);
+    
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('user:muted', {
+        reason: '3 warnings accumulated, auto-muted30 minutes',
+        duration: '30 minutes',
+        permanent: false
+      });
+    }
+    
+    // Clear warning records
+    warnings[targetOdp] = [];
+    saveJSON(warningsFile, warnings);
+  }
+}
+
+// ===== Notify Admins =====
+function notifyAdmins(event, data) {
+  userSockets.forEach((socketId, odp) => {
+    const user = registeredUsers[odp];
+    if (user && hasPermission(user, 'view_reports')) {
+      io.to(socketId).emit(event, data);
+    }
+  });
+}
+
+// ===== Get User Public Info =====
+function getUserPublicInfo(user) {
+  const roleInfo = getRoleInfo(user.role);
+  return {
+    odp: user.odp,
+    nickname: user.nickname,
+    avatar: user.avatar,
+    signature: user.signature,
+    role: user.role,
+    roleInfo: {
+      name: roleInfo.name,
+      color: roleInfo.color,
+      badge: roleInfo.badge,
+      level: roleInfo.level
+    }
+  };
+}
+
+// ===== Get User Private Info =====
+function getUserPrivateInfo(user) {
+  const roleInfo = getRoleInfo(user.role);
+  return {
+    odp: user.odp,
+    username: user.username,
+    nickname: user.nickname,
+    avatar: user.avatar,
+    signature: user.signature,
+    role: user.role,
+    roleInfo: {
+      name: roleInfo.name,
+      color: roleInfo.color,
+      badge: roleInfo.badge,
+      level: roleInfo.level,
+      permissions: roleInfo.permissions
+    },
+    friends: friends[user.odp] || []
+  };
+}
+
+// ===== Configure File Upload =====
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    let dest = filesDir;
+    if (file.mimetype.startsWith('image/')) dest = imagesDir;
+    else if (file.mimetype.startsWith('video/')) dest = videosDir;
+    else if (file.mimetype.startsWith('audio/')) dest = voicesDir;
+    cb(null, dest);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `${uuidv4()}${ext}`);
+  }
+});
+
+const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
+
+// ===== Express Middleware =====
+app.use(express.json());
+app.use(express.static(path.join(__dirname, '../public')));
+app.use('/uploads', express.static(uploadsDir));
+
+// ===== API Routes =====
+app.get('/api/server-info', (req, res) => {
+  res.json({ ip: getLocalIP(), port: PORT });
+});
+
+// Check if local access, auto login SuperAdmin
+app.get('/api/auto-login', (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  
+  if (isLocal) {
+    const superAdmin = registeredUsers['super-admin-001'];
+    if (superAdmin) {
+      res.json({ 
+        autoLogin: true, 
+        user: getUserPrivateInfo(superAdmin)
+      });
+    } else {
+      res.json({ autoLogin: false });
+    }
+  } else {
+    res.json({ autoLogin: false });
+  }
+});
+
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, error: 'No file' });
+  
+  let urlPath = '/uploads/files/';
+  if (req.file.mimetype.startsWith('image/')) urlPath = '/uploads/images/';
+  else if (req.file.mimetype.startsWith('video/')) urlPath = '/uploads/videos/';
+  else if (req.file.mimetype.startsWith('audio/')) urlPath = '/uploads/voices/';
+  
+  res.json({
+    success: true,
+    url: `${urlPath}${req.file.filename}`,
+    filename: req.file.originalname,
+    size: req.file.size,
+    type: req.file.mimetype
+  });
+});
+
+app.post('/api/upload-avatar', upload.single('avatar'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file' });
+  
+  const newPath = path.join(avatarsDir, req.file.filename);
+  if (req.file.path !== newPath) {
+    fs.renameSync(req.file.path, newPath);
+  }
+  
+  res.json({ url: `/uploads/avatars/${req.file.filename}` });
+});
+
+// ===== Socket.IO Connection Handler =====
+io.on('connection', (socket) => {
+  console.log(`[Connected] ${socket.id}`);
+
+  // ===== Helper Functions =====
+  function sendOnlineUsers(socket, excludeodp) {
+    const onlineList = [];
+    userSockets.forEach((socketId, odp) => {
+      if (odp !== excludeodp) {
+        const user = registeredUsers[odp];
+        if (user) {
+          onlineList.push({
+            ...getUserPublicInfo(user),
+            status: 'online',
+            isFriend: areFriends(excludeodp, odp)
+          });
+        }
+      }
+    });
+    socket.emit('users:list', onlineList);
+  }
+
+  function sendUserRooms(socket, odp) {
+    const userRooms = [];
+    Object.values(allRooms).forEach(room => {
+      if (room.members.includes(odp)) {
+        userRooms.push(room);
+        socket.join(room.id);
+      }
+    });
+    socket.emit('rooms:list', { rooms: userRooms });
+  }
+
+  function sendFriendRequests(socket, odp) {
+    const requests = friendRequests[odp] || [];
+    const pendingRequests = requests.filter(r => r.status === 'pending').map(r => ({
+      ...r,
+      senderInfo: getUserPublicInfo(registeredUsers[r.from])
+    }));
+    socket.emit('friend:requests', pendingRequests);
+  }
+
+  // ===== Session Recovery =====
+  socket.on('session:restore', (data) => {
+    const { odp, username } = data;
+    
+    if (!odp || !registeredUsers[odp]) {
+      return socket.emit('session:fail');
+    }
+    
+    const ban = checkBan(odp);
+    if (ban) {
+      return socket.emit('login:fail', { 
+        message: `Account Permanetly Banned${ban.permanent ? '(Permanet)' : `Until ${new Date(ban.until).toLocaleString()}`}，Because: ${ban.reason}` 
+      });
+    }
+    
+    const user = registeredUsers[odp];
+    
+    if (userSockets.has(odp)) {
+      const oldSocketId = userSockets.get(odp);
+      if (oldSocketId !== socket.id) {
+        const oldSocket = io.sockets.sockets.get(oldSocketId);
+        if (oldSocket) {
+          oldSocket.emit('force:logout', { message: 'Your account is logged on another device' });
+          oldSocket.disconnect();
+        }
+      }
+    }
+    
+    onlineSockets.set(socket.id, odp);
+    userSockets.set(odp, socket.id);
+    
+    socket.broadcast.emit('user:online', getUserPublicInfo(user));
+    
+    console.log(`[Session Recovered] ${user.nickname} (${username})`);
+    
+    socket.emit('session:restored', { user: getUserPrivateInfo(user) });
+    sendOnlineUsers(socket, user.odp);
+    sendUserRooms(socket, user.odp);
+    sendFriendRequests(socket, user.odp);
+  });
+
+  // ===== User Registration =====
+  socket.on('user:register', (data) => {
+    const { username, password, nickname, avatar, signature } = data;
+    
+    if (!username || !password) {
+      return socket.emit('register:fail', { message: 'Username and Password cannot be left blank' });
+    }
+    
+    if (username.toLowerCase() === 'superadmin' || nickname?.toLowerCase() === 'superadmin') {
+      return socket.emit('register:fail', { message: 'This username/nickname is not available' });
+    }
+    
+    // Profanity check - username
+    if (containsProfanity(username)) {
+      return socket.emit('register:fail', { message: 'Username have inapropriate words, please change it' });
+    }
+    
+    // Profanity check - nickname
+    if (containsProfanity(nickname)) {
+      return socket.emit('register:fail', { message: 'Username have inapropriate words, please change it' });
+    }
+    
+    if (username.length < 3 || username.length > 20) {
+      return socket.emit('register:fail', { message: 'username length should be 3-20 characters' });
+    }
+    
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+      return socket.emit('register:fail', { message: 'The username can only consist of letters, numbers and underscores.' });
+    }
+    
+    if (password.length < 6) {
+      return socket.emit('register:fail', { message: 'Password should be at least 6 characters' });
+    }
+    
+    if (!/[a-zA-Z]/.test(password)) {
+      return socket.emit('register:fail', { message: 'Password should at least contain 1 letter' });
+    }
+    
+    const existingUser = Object.values(registeredUsers).find(u => u.username.toLowerCase() === username.toLowerCase());
+    if (existingUser) {
+      return socket.emit('register:fail', { message: 'Username taken' });
+    }
+    
+    const odp = uuidv4();
+    const user = {
+      odp,
+      username,
+      password: hashPassword(password),
+      nickname: nickname || username,
+      avatar: avatar || null,
+      signature: signature || '',
+      role: 'USER',
+      createdAt: new Date().toISOString(),
+      friends: [],
+      groups: []
+    };
+    
+    registeredUsers[odp] = user;
+    saveJSON(usersFile, registeredUsers);
+    
+    friends[odp] = [];
+    saveJSON(friendsFile, friends);
+    
+    onlineSockets.set(socket.id, odp);
+    userSockets.set(odp, socket.id);
+    
+    socket.broadcast.emit('user:online', getUserPublicInfo(user));
+    
+    console.log(`[Register] ${nickname || username} (${username})`);
+    
+    socket.emit('register:success', { user: getUserPrivateInfo(user) });
+    sendOnlineUsers(socket, user.odp);
+  });
+
+  // ===== User Login =====
+  socket.on('user:login', (data) => {
+    const { username, password } = data;
+    
+    if (!username || !password) {
+      return socket.emit('login:fail', { message: 'Please enter username and password' });
+    }
+    
+    const user = Object.values(registeredUsers).find(u => u.username === username);
+    if (!user) {
+      return socket.emit('login:fail', { message: 'User does not exist' });
+    }
+    
+    if (user.password !== hashPassword(password)) {
+      return socket.emit('login:fail', { message: 'Incorrect password' });
+    }
+    
+    const ban = checkBan(user.odp);
+    if (ban) {
+      return socket.emit('login:fail', { 
+        message: `Account has been banned${ban.permanent ? '(permanent)' : `until ${new Date(ban.until).toLocaleString()}`}, reason: ${ban.reason}` 
+      });
+    }
+    
+    if (user.role === 'SUPER_ADMIN') {
+      const clientIP = socket.handshake.address;
+      const isLocal = clientIP === '127.0.0.1' || clientIP === '::1' || clientIP === '::ffff:127.0.0.1';
+      if (!isLocal) {
+        return socket.emit('login:fail', { message: 'This account can only login locally' });
+      }
+    }
+    
+    if (userSockets.has(user.odp)) {
+      const oldSocketId = userSockets.get(user.odp);
+      const oldSocket = io.sockets.sockets.get(oldSocketId);
+      if (oldSocket) {
+        oldSocket.emit('force:logout', { message: 'Your account logged in on another device' });
+        oldSocket.disconnect();
+      }
+    }
+    
+    onlineSockets.set(socket.id, user.odp);
+    userSockets.set(user.odp, socket.id);
+    
+    socket.broadcast.emit('user:online', getUserPublicInfo(user));
+    
+    console.log(`[Login] ${user.nickname} (${username})`);
+    
+    socket.emit('login:success', { user: getUserPrivateInfo(user) });
+    sendOnlineUsers(socket, user.odp);
+    sendUserRooms(socket, user.odp);
+    sendFriendRequests(socket, user.odp);
+  });
+
+  // ===== Get Online Users =====
+  socket.on('users:getOnline', () => {
+    const myodp = onlineSockets.get(socket.id);
+    if (myodp) {
+      sendOnlineUsers(socket, myodp);
+    }
+  });
+
+  // ===== Friend System =====
+  socket.on('friend:request', (data) => {
+    const senderOdp = onlineSockets.get(socket.id);
+    if (!senderOdp) return;
+    
+    const { targetOdp } = data;
+    if (!targetOdp || !registeredUsers[targetOdp]) {
+      return socket.emit('friend:error', { message: 'User does not exist' });
+    }
+    
+    if (senderOdp === targetOdp) {
+      return socket.emit('friend:error', { message: 'Cannot add yourself as friend' });
+    }
+    
+    if (areFriends(senderOdp, targetOdp)) {
+      return socket.emit('friend:error', { message: 'Already friends' });
+    }
+    
+    const targetRequests = friendRequests[targetOdp] || [];
+    const existingRequest = targetRequests.find(r => r.from === senderOdp && r.status === 'pending');
+    if (existingRequest) {
+      return socket.emit('friend:error', { message: 'Friend request already sent, please wait for response' });
+    }
+    
+    const request = {
+      id: uuidv4(),
+      from: senderOdp,
+      to: targetOdp,
+      status: 'pending',
+      createdAt: new Date().toISOString()
+    };
+    
+    if (!friendRequests[targetOdp]) friendRequests[targetOdp] = [];
+    friendRequests[targetOdp].push(request);
+    saveJSON(friendRequestsFile, friendRequests);
+    
+    const targetSocketId = userSockets.get(targetOdp);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('friend:newRequest', {
+        ...request,
+        senderInfo: getUserPublicInfo(registeredUsers[senderOdp])
+      });
+    }
+    
+    socket.emit('friend:requestSent', { targetOdp });
+    console.log(`[Friend Request] ${registeredUsers[senderOdp].nickname} -> ${registeredUsers[targetOdp].nickname}`);
+  });
+
+  socket.on('friend:accept', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { requestId } = data;
+    const myRequests = friendRequests[myOdp] || [];
+    const request = myRequests.find(r => r.id === requestId);
+    
+    if (!request || request.status !== 'pending') {
+      return socket.emit('friend:error', { message: 'Friend request does not exist or has been processed' });
+    }
+    
+    request.status = 'accepted';
+    saveJSON(friendRequestsFile, friendRequests);
+    
+    if (!friends[myOdp]) friends[myOdp] = [];
+    if (!friends[request.from]) friends[request.from] = [];
+    
+    if (!friends[myOdp].includes(request.from)) {
+      friends[myOdp].push(request.from);
+    }
+    if (!friends[request.from].includes(myOdp)) {
+      friends[request.from].push(myOdp);
+    }
+    saveJSON(friendsFile, friends);
+    
+    socket.emit('friend:added', { friendOdp: request.from, friendInfo: getUserPublicInfo(registeredUsers[request.from]) });
+    
+    const senderSocketId = userSockets.get(request.from);
+    if (senderSocketId) {
+      io.to(senderSocketId).emit('friend:added', { friendOdp: myOdp, friendInfo: getUserPublicInfo(registeredUsers[myOdp]) });
+    }
+    
+    console.log(`[Became Friends] ${registeredUsers[myOdp].nickname} <-> ${registeredUsers[request.from].nickname}`);
+  });
+
+  socket.on('friend:reject', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { requestId } = data;
+    const myRequests = friendRequests[myOdp] || [];
+    const request = myRequests.find(r => r.id === requestId);
+    
+    if (!request || request.status !== 'pending') {
+      return socket.emit('friend:error', { message: 'Friend request does not exist or has been processed' });
+    }
+    
+    request.status = 'rejected';
+    saveJSON(friendRequestsFile, friendRequests);
+    
+    socket.emit('friend:rejected', { requestId });
+  });
+
+  socket.on('friend:remove', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { friendOdp } = data;
+    
+    if (friends[myOdp]) {
+      friends[myOdp] = friends[myOdp].filter(f => f !== friendOdp);
+    }
+    if (friends[friendOdp]) {
+      friends[friendOdp] = friends[friendOdp].filter(f => f !== myOdp);
+    }
+    saveJSON(friendsFile, friends);
+    
+    socket.emit('friend:removed', { friendOdp });
+    
+    const friendSocketId = userSockets.get(friendOdp);
+    if (friendSocketId) {
+      io.to(friendSocketId).emit('friend:removed', { friendOdp: myOdp });
+    }
+  });
+
+  // Get friend request list
+  socket.on('friend:getRequests', () => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    sendFriendRequests(socket, myOdp);
+  });
+
+  socket.on('friends:get', () => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const myFriends = (friends[myOdp] || []).map(fOdp => {
+      const friend = registeredUsers[fOdp];
+      if (!friend) return null;
+      return {
+        ...getUserPublicInfo(friend),
+        online: userSockets.has(fOdp)
+      };
+    }).filter(f => f !== null);
+    
+    socket.emit('friends:list', myFriends);
+  });
+
+  // ===== Private Chat Messages =====
+  socket.on('message:private', (data) => {
+    const senderId = onlineSockets.get(socket.id);
+    if (!senderId) return;
+    
+    const sender = registeredUsers[senderId];
+    if (!sender) return;
+    
+    // Performance: Message throttle
+    if (isThrottled(senderId)) {
+      return socket.emit('message:error', { message: 'Sending too fast, please wait' });
+    }
+    
+    // Performance: Message deduplication
+    if (isDuplicateMessage(senderId, data.content, data.type || 'text')) {
+      console.log(`[Dedup] Duplicate message detected: ${sender.nickname}`);
+      return;
+    }
+    
+    const mute = checkMute(senderId);
+    if (mute) {
+      const remaining = mute.permanent ? 'Permanent' : formatRemaining(new Date(mute.until) - Date.now());
+      return socket.emit('message:error', { 
+        message: `You have been muted`,
+        type: 'mute',
+        detail: {
+          reason: mute.reason || 'Violation of rules',
+          duration: mute.permanent ? 'Permanent' : `until ${new Date(mute.until).toLocaleString()}`,
+          remaining: remaining,
+          permanent: mute.permanent
+        }
+      });
+    }
+    
+    const receiverId = data.to || data.receiverId;
+    const { type, filename, filesize, duration, replyTo } = data;
+    let { content } = data;
+    
+    if (!receiverId || !content) return;
+    
+    // Profanity check - text message
+    if (type === 'text' || !type) {
+      if (containsProfanity(content)) {
+        content = filterProfanity(content);
+      }
+    }
+    
+    const canSend = canSendMessage(senderId, receiverId);
+    if (!canSend.allowed) {
+      return socket.emit('message:error', { message: canSend.reason });
+    }
+    
+    const message = {
+      id: uuidv4(),
+      type: type || 'text',
+      content,
+      filename,
+      filesize,
+      duration,
+      from: senderId,
+      to: receiverId,
+      senderId,
+      senderName: sender.nickname,
+      senderAvatar: sender.avatar,
+      senderRole: sender.role,
+      senderRoleInfo: getRoleInfo(sender.role),
+      receiverId,
+      timestamp: Date.now(),
+      status: 'sent',
+      replyTo: replyTo || null,
+      isFirstMessage: canSend.isFirstMessage || false
+    };
+    
+    const chatId = getChatId(senderId, receiverId);
+    if (!allMessages[chatId]) {
+      allMessages[chatId] = [];
+    }
+    allMessages[chatId].push(message);
+    saveJSON(messagesFile, allMessages);
+    
+    const receiverSocketId = userSockets.get(receiverId);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit('message:private', message);
+      message.status = 'delivered';
+    }
+    
+    socket.emit('message:private', message);
+    
+    console.log(`[Private] ${sender.nickname} -> ${registeredUsers[receiverId]?.nickname || receiverId}: ${type === 'text' ? content.slice(0, 20) : `[${type}]`}`);
+  });
+
+  // ===== Poke =====
+  socket.on('poke', (data) => {
+    const senderOdp = onlineSockets.get(socket.id);
+    if (!senderOdp) return;
+    
+    const { targetOdp } = data;
+    const sender = registeredUsers[senderOdp];
+    const target = registeredUsers[targetOdp];
+    
+    if (!target) return;
+    
+    const targetSocketId = userSockets.get(targetOdp);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('poked', {
+        from: senderOdp,
+        fromName: sender.nickname,
+        fromAvatar: sender.avatar
+      });
+    }
+    
+    // Send system message to both parties
+    const chatId = getChatId(senderOdp, targetOdp);
+    const systemMsg = {
+      id: uuidv4(),
+      type: 'system',
+      content: `${sender.nickname} poked ${target.nickname}`,
+      timestamp: Date.now()
+    };
+    
+    if (!allMessages[chatId]) allMessages[chatId] = [];
+    allMessages[chatId].push(systemMsg);
+    saveJSON(messagesFile, allMessages);
+    
+    socket.emit('message:private', systemMsg);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('message:private', systemMsg);
+    }
+    
+    console.log(`[Poke] ${sender.nickname} poked ${target.nickname}`);
+  });
+
+  // ===== Message Reactions =====
+  socket.on('message:react', (data) => {
+    const senderOdp = onlineSockets.get(socket.id);
+    if (!senderOdp) return;
+    
+    const { messageId, emoji, chatType, chatId } = data;
+    const sender = registeredUsers[senderOdp];
+    
+    const messagesKey = chatType === 'room' ? `room_${chatId}` : chatId;
+    const messages = allMessages[messagesKey];
+    
+    if (!messages) return;
+    
+    const message = messages.find(m => m.id === messageId);
+    if (!message) return;
+    
+    if (!message.reactions) message.reactions = {};
+    if (!message.reactions[emoji]) message.reactions[emoji] = [];
+    
+    const existingIndex = message.reactions[emoji].indexOf(senderOdp);
+    if (existingIndex > -1) {
+      message.reactions[emoji].splice(existingIndex, 1);
+      if (message.reactions[emoji].length === 0) {
+        delete message.reactions[emoji];
+      }
+    } else {
+      message.reactions[emoji].push(senderOdp);
+    }
+    
+    saveJSON(messagesFile, allMessages);
+    
+    const reactionData = {
+      messageId,
+      reactions: message.reactions,
+      reactedBy: senderOdp,
+      reactedByName: sender.nickname,
+      emoji
+    };
+    
+    if (chatType === 'room') {
+      io.to(chatId).emit('message:reacted', reactionData);
+    } else {
+      socket.emit('message:reacted', reactionData);
+      const otherOdp = chatId.split('_').find(id => id !== senderOdp);
+      const otherSocketId = userSockets.get(otherOdp);
+      if (otherSocketId) {
+        io.to(otherSocketId).emit('message:reacted', reactionData);
+      }
+    }
+  });
+
+  // ===== Get Message History =====
+  socket.on('messages:get', (data) => {
+    const myodp = onlineSockets.get(socket.id);
+    if (!myodp) return socket.emit('messages:history', { chatId: data?.targetId, messages: [] });
+    
+    const { type, targetId } = data;
+    
+    if (type === 'private') {
+      const chatId = getChatId(myodp, targetId);
+      const messages = allMessages[chatId] || [];
+      socket.emit('messages:history', { chatId: targetId, messages });
+    } else if (type === 'room') {
+      const messages = allMessages[`room_${targetId}`] || [];
+      socket.emit('messages:history', { chatId: targetId, messages });
+    }
+  });
+
+  // ===== Group Chat Messages =====
+  socket.on('message:room', (data) => {
+    const senderId = onlineSockets.get(socket.id);
+    if (!senderId) return;
+    
+    const sender = registeredUsers[senderId];
+    if (!sender) return;
+    
+    // Performance: Message throttle
+    if (isThrottled(senderId)) {
+      return socket.emit('message:error', { message: 'Sending too fast, please wait' });
+    }
+    
+    // Performance: Message deduplication
+    if (isDuplicateMessage(senderId, data.content, data.type || 'text')) {
+      console.log(`[Dedup] Duplicate message detected: ${sender.nickname}`);
+      return;
+    }
+    
+    const mute = checkMute(senderId);
+    if (mute) {
+      const remaining = mute.permanent ? 'Permanent' : formatRemaining(new Date(mute.until) - Date.now());
+      return socket.emit('message:error', { 
+        message: `You have been muted`,
+        type: 'mute',
+        detail: {
+          reason: mute.reason || 'Violation of rules',
+          duration: mute.permanent ? 'Permanent' : `until ${new Date(mute.until).toLocaleString()}`,
+          remaining: remaining,
+          permanent: mute.permanent
+        }
+      });
+    }
+    
+    const { roomId, type, filename, filesize, duration, replyTo } = data;
+    let { content } = data;
+    
+    if (!roomId || !content) return;
+    
+    // Profanity check - group message
+    if (type === 'text' || !type) {
+      if (containsProfanity(content)) {
+        content = filterProfanity(content);
+      }
+    }
+    
+    const room = allRooms[roomId];
+    if (!room || !room.members.includes(senderId)) {
+      return socket.emit('message:error', { message: 'You are not a member of this group' });
+    }
+    
+    const message = {
+      id: uuidv4(),
+      roomId,
+      roomName: room.name,
+      type: type || 'text',
+      content,
+      filename,
+      filesize,
+      duration,
+      senderId,
+      senderName: sender.nickname,
+      senderAvatar: sender.avatar,
+      senderRole: sender.role,
+      senderRoleInfo: getRoleInfo(sender.role),
+      timestamp: Date.now(),
+      replyTo: replyTo || null
+    };
+    
+    if (!allMessages[`room_${roomId}`]) {
+      allMessages[`room_${roomId}`] = [];
+    }
+    allMessages[`room_${roomId}`].push(message);
+    saveJSON(messagesFile, allMessages);
+    
+    io.to(roomId).emit('message:room', message);
+    
+    console.log(`[Group:${room.name}] ${sender.nickname}: ${type === 'text' ? content.slice(0, 20) : `[${type}]`}`);
+  });
+
+  // ===== Create Group Chat =====
+  socket.on('room:create', (data) => {
+    const creatorOdp = onlineSockets.get(socket.id);
+    if (!creatorOdp) return;
+    
+    const { name, members = [] } = data;
+    
+    if (!name || name.length < 2) {
+      return socket.emit('room:error', { message: 'Group name must be at least 2 characters' });
+    }
+    
+    // Profanity check - group name
+    if (containsProfanity(name)) {
+      return socket.emit('room:error', { message: 'Group name contains inappropriate content, please modify' });
+    }
+    
+    const roomId = uuidv4();
+    const allMembers = [...new Set([creatorOdp, ...members])];
+    
+    const room = {
+      id: roomId,
+      name,
+      owner: creatorOdp,
+      admins: [],
+      members: allMembers,
+      createdAt: new Date().toISOString(),
+      settings: {
+        allowInvite: true,
+        muteAll: false
+      }
+    };
+    
+    allRooms[roomId] = room;
+    saveJSON(roomsFile, allRooms);
+    
+    allMembers.forEach(memberOdp => {
+      const memberSocketId = userSockets.get(memberOdp);
+      if (memberSocketId) {
+        const memberSocket = io.sockets.sockets.get(memberSocketId);
+        if (memberSocket) {
+          memberSocket.join(roomId);
+          io.to(memberSocketId).emit('room:joined', room);
+        }
+      }
+    });
+    
+    socket.emit('room:created', room);
+    console.log(`[Create Group] ${name} by ${registeredUsers[creatorOdp].nickname}`);
+  });
+
+  // ===== Group Chat Management =====
+  socket.on('room:kick', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { roomId, targetOdp } = data;
+    const room = allRooms[roomId];
+    
+    if (!room) return socket.emit('room:error', { message: 'Group does not exist' });
+    
+    const user = registeredUsers[myOdp];
+    const isOwner = room.owner === myOdp;
+    const isAdmin = room.admins?.includes(myOdp);
+    const hasAdminPerm = hasPermission(user, 'manage_rooms');
+    
+    if (!isOwner && !isAdmin && !hasAdminPerm) {
+      return socket.emit('room:error', { message: 'You do not have permission to kick' });
+    }
+    
+    if (targetOdp === room.owner) {
+      return socket.emit('room:error', { message: 'Cannot kick the group owner' });
+    }
+    
+    room.members = room.members.filter(m => m !== targetOdp);
+    room.admins = (room.admins || []).filter(a => a !== targetOdp);
+    saveJSON(roomsFile, allRooms);
+    
+    const targetSocketId = userSockets.get(targetOdp);
+    if (targetSocketId) {
+      const targetSocket = io.sockets.sockets.get(targetSocketId);
+      if (targetSocket) {
+        targetSocket.leave(roomId);
+        io.to(targetSocketId).emit('room:kicked', { roomId, roomName: room.name });
+      }
+    }
+    
+    io.to(roomId).emit('room:memberLeft', { roomId, memberOdp: targetOdp });
+    
+    console.log(`[Kick from Group] ${registeredUsers[targetOdp]?.nickname} was kicked from ${room.name}`);
+  });
+
+  socket.on('room:update', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { roomId, name, settings } = data;
+    const room = allRooms[roomId];
+    
+    if (!room) return socket.emit('room:error', { message: 'Group does not exist' });
+    
+    const user = registeredUsers[myOdp];
+    const isOwner = room.owner === myOdp;
+    const hasAdminPerm = hasPermission(user, 'manage_rooms');
+    
+    if (!isOwner && !hasAdminPerm) {
+      return socket.emit('room:error', { message: 'Only the group owner can modify settings' });
+    }
+    
+    // Profanity check - group name edit
+    if (name && containsProfanity(name)) {
+      return socket.emit('room:error', { message: 'Group name contains inappropriate content, please modify' });
+    }
+    
+    if (name) room.name = name;
+    if (settings) room.settings = { ...room.settings, ...settings };
+    
+    saveJSON(roomsFile, allRooms);
+    
+    io.to(roomId).emit('room:updated', room);
+  });
+
+  socket.on('room:setAdmin', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { roomId, targetOdp, isAdmin } = data;
+    const room = allRooms[roomId];
+    
+    if (!room) return socket.emit('room:error', { message: 'Group does not exist' });
+    if (room.owner !== myOdp) return socket.emit('room:error', { message: 'Only the group owner can set admins' });
+    
+    if (!room.admins) room.admins = [];
+    
+    if (isAdmin && !room.admins.includes(targetOdp)) {
+      room.admins.push(targetOdp);
+    } else if (!isAdmin) {
+      room.admins = room.admins.filter(a => a !== targetOdp);
+    }
+    
+    saveJSON(roomsFile, allRooms);
+    io.to(roomId).emit('room:updated', room);
+  });
+
+  // ===== Invite Members to Group =====
+  socket.on('room:invite', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { roomId, targetOdps } = data;
+    const room = allRooms[roomId];
+    
+    if (!room) return socket.emit('room:error', { message: 'Group does not exist' });
+    if (!room.members.includes(myOdp)) return socket.emit('room:error', { message: 'You are not a member of this group' });
+    
+    // Check if group settings allow invites
+    if (room.settings && room.settings.allowInvite === false) {
+      const isOwner = room.owner === myOdp;
+      const isAdmin = room.admins?.includes(myOdp);
+      if (!isOwner && !isAdmin) {
+        return socket.emit('room:error', { message: 'This group prohibits regular members from inviting' });
+      }
+    }
+    
+    const inviter = registeredUsers[myOdp];
+    const newMembers = [];
+    
+    for (const targetOdp of targetOdps) {
+      if (!room.members.includes(targetOdp) && registeredUsers[targetOdp]) {
+        room.members.push(targetOdp);
+        newMembers.push(targetOdp);
+        
+        // Join socket room
+        const targetSocketId = userSockets.get(targetOdp);
+        if (targetSocketId) {
+          const targetSocket = io.sockets.sockets.get(targetSocketId);
+          if (targetSocket) {
+            targetSocket.join(roomId);
+            io.to(targetSocketId).emit('room:joined', room);
+          }
+        }
+      }
+    }
+    
+    if (newMembers.length > 0) {
+      saveJSON(roomsFile, allRooms);
+      
+      // Send system message to notify group members
+      const newMemberNames = newMembers.map(odp => registeredUsers[odp]?.nickname || 'Unknown User').join('、');
+      const systemMsg = {
+        id: uuidv4(),
+        roomId,
+        type: 'system',
+        content: `${inviter.nickname} invited ${newMemberNames} to join the group`,
+        timestamp: Date.now()
+      };
+      
+      if (!allMessages[`room_${roomId}`]) {
+        allMessages[`room_${roomId}`] = [];
+      }
+      allMessages[`room_${roomId}`].push(systemMsg);
+      saveJSON(messagesFile, allMessages);
+      
+      io.to(roomId).emit('message:room', systemMsg);
+      io.to(roomId).emit('room:updated', room);
+      
+      console.log(`[Group Invite] ${inviter.nickname} invited ${newMemberNames} join ${room.name}`);
+    }
+    
+    socket.emit('room:inviteSuccess', { count: newMembers.length });
+  });
+
+  // ===== Update Group Avatar =====
+  socket.on('room:updateAvatar', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { roomId, avatar } = data;
+    const room = allRooms[roomId];
+    
+    if (!room) return socket.emit('room:error', { message: 'Group does not exist' });
+    if (room.owner !== myOdp) return socket.emit('room:error', { message: 'Only the group owner can modify the group avatar' });
+    
+    room.avatar = avatar;
+    saveJSON(roomsFile, allRooms);
+    
+    io.to(roomId).emit('room:updated', room);
+    console.log(`[Group Avatar] ${room.name} group avatar has been updated`);
+  });
+
+  // ===== Update Group Announcement =====
+  socket.on('room:updateAnnouncement', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { roomId, announcement } = data;
+    const room = allRooms[roomId];
+    
+    if (!room) return socket.emit('room:error', { message: 'Group does not exist' });
+    
+    const isOwner = room.owner === myOdp;
+    const isAdmin = room.admins?.includes(myOdp);
+    if (!isOwner && !isAdmin) {
+      return socket.emit('room:error', { message: 'Only the owner or admins can post announcements' });
+    }
+    
+    room.announcement = announcement;
+    saveJSON(roomsFile, allRooms);
+    
+    // Send system message for group announcement
+    const announcer = registeredUsers[myOdp];
+    const systemMsg = {
+      id: uuidv4(),
+      roomId,
+      type: 'system',
+      content: `📢 Announcement: ${announcement}`,
+      timestamp: Date.now()
+    };
+    
+    if (!allMessages[`room_${roomId}`]) {
+      allMessages[`room_${roomId}`] = [];
+    }
+    allMessages[`room_${roomId}`].push(systemMsg);
+    saveJSON(messagesFile, allMessages);
+    
+    io.to(roomId).emit('message:room', systemMsg);
+    io.to(roomId).emit('room:updated', room);
+    console.log(`[Group Announcement] ${announcer.nickname} in ${room.name} posted an announcement`);
+  });
+
+  // ===== Leave Group =====
+  socket.on('room:leave', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { roomId } = data;
+    const room = allRooms[roomId];
+    
+    if (!room) return socket.emit('room:error', { message: 'Group does not exist' });
+    if (room.owner === myOdp) return socket.emit('room:error', { message: 'Owner cannot leave. Please transfer ownership or dissolve the group' });
+    
+    room.members = room.members.filter(m => m !== myOdp);
+    if (room.admins) room.admins = room.admins.filter(a => a !== myOdp);
+    
+    saveJSON(roomsFile, allRooms);
+    
+    socket.leave(roomId);
+    
+    const leaver = registeredUsers[myOdp];
+    const systemMsg = {
+      id: uuidv4(),
+      roomId,
+      type: 'system',
+      content: `${leaver.nickname} left the group`,
+      timestamp: Date.now()
+    };
+    
+    if (!allMessages[`room_${roomId}`]) {
+      allMessages[`room_${roomId}`] = [];
+    }
+    allMessages[`room_${roomId}`].push(systemMsg);
+    saveJSON(messagesFile, allMessages);
+    
+    io.to(roomId).emit('message:room', systemMsg);
+    io.to(roomId).emit('room:updated', room);
+    socket.emit('room:left', { roomId });
+    
+    console.log(`[Leave Group] ${leaver.nickname} left ${room.name}`);
+  });
+
+  // ===== Dissolve Group =====
+  socket.on('room:disband', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { roomId } = data;
+    const room = allRooms[roomId];
+    
+    if (!room) return socket.emit('room:error', { message: 'Group does not exist' });
+    if (room.owner !== myOdp) return socket.emit('room:error', { message: 'Only the group owner can dissolve the group' });
+    
+    const roomName = room.name;
+    
+    // Notify all members
+    io.to(roomId).emit('room:disbanded', { roomId, roomName });
+    
+    // Delete group
+    delete allRooms[roomId];
+    saveJSON(roomsFile, allRooms);
+    
+    // Delete group messages
+    delete allMessages[`room_${roomId}`];
+    saveJSON(messagesFile, allMessages);
+    
+    console.log(`[Dissolve Group] ${registeredUsers[myOdp].nickname} dissolved ${roomName}`);
+  });
+
+  // ===== Typing =====
+  socket.on('user:typing', (data) => {
+    const senderId = onlineSockets.get(socket.id);
+    if (!senderId) return;
+    
+    const receiverSocketId = userSockets.get(data.to);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit('user:typing', { from: senderId });
+    }
+  });
+
+  // ===== Change Password =====
+  socket.on('user:changePassword', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { oldPassword, newPassword } = data;
+    const user = registeredUsers[myOdp];
+    
+    if (!user) return socket.emit('password:error', { message: 'User does not exist' });
+    
+    if (user.password !== hashPassword(oldPassword)) {
+      return socket.emit('password:error', { message: 'Original password incorrect' });
+    }
+    
+    if (newPassword.length < 6) {
+      return socket.emit('password:error', { message: 'New password must be at least 6 characters' });
+    }
+    
+    user.password = hashPassword(newPassword);
+    saveJSON(usersFile, registeredUsers);
+    
+    socket.emit('password:changed');
+  });
+
+  // ===== Update Profile =====
+  socket.on('user:updateProfile', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const user = registeredUsers[myOdp];
+    if (!user) return;
+    
+    const { nickname, signature, avatar } = data;
+    
+    if (nickname?.toLowerCase() === 'superadmin') {
+      return socket.emit('profile:error', { message: 'This nickname is not available' });
+    }
+    
+    if (nickname) user.nickname = nickname;
+    if (signature !== undefined) user.signature = signature;
+    if (avatar !== undefined) user.avatar = avatar;
+    
+    saveJSON(usersFile, registeredUsers);
+    
+    socket.emit('profile:updated', getUserPrivateInfo(user));
+    socket.broadcast.emit('user:updated', getUserPublicInfo(user));
+  });
+
+  // ===== Moments Feature =====
+  socket.on('moments:get', () => {
+    socket.emit('moments:list', allMoments);
+  });
+
+  socket.on('moments:post', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const user = registeredUsers[myOdp];
+    if (!user) return;
+    
+    const { content, images } = data;
+    
+    if (!content && (!images || images.length === 0)) {
+      return socket.emit('moments:error', { message: 'Content cannot be empty' });
+    }
+    
+    // Profanity check
+    if (containsProfanity(content)) {
+      return socket.emit('moments:error', { message: 'Content contains inappropriate words' });
+    }
+    
+    const moment = {
+      id: uuidv4(),
+      odp: myOdp,
+      nickname: user.nickname,
+      avatar: user.avatar,
+      content: content || '',
+      images: images || [],
+      likes: [],
+      comments: [],
+      timestamp: Date.now()
+    };
+    
+    allMoments.unshift(moment);
+    // Keep only the latest 100 moments
+    if (allMoments.length > 100) {
+      allMoments = allMoments.slice(0, 100);
+    }
+    saveJSON(momentsFile, allMoments);
+    
+    // Broadcast to all online users
+    io.emit('moments:new', moment);
+    
+    console.log(`[Moments] ${user.nickname} posted a new moment`);
+  });
+
+  socket.on('moments:like', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const { momentId } = data;
+    const moment = allMoments.find(m => m.id === momentId);
+    
+    if (!moment) return;
+    
+    const likeIndex = moment.likes.indexOf(myOdp);
+    if (likeIndex === -1) {
+      moment.likes.push(myOdp);
+    } else {
+      moment.likes.splice(likeIndex, 1);
+    }
+    
+    saveJSON(momentsFile, allMoments);
+    io.emit('moments:updated', moment);
+  });
+
+  socket.on('moments:comment', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const user = registeredUsers[myOdp];
+    if (!user) return;
+    
+    const { momentId, content } = data;
+    
+    if (!content) return;
+    
+    // Profanity check
+    if (containsProfanity(content)) {
+      return socket.emit('moments:error', { message: 'Comment contains inappropriate words' });
+    }
+    
+    const moment = allMoments.find(m => m.id === momentId);
+    if (!moment) return;
+    
+    moment.comments.push({
+      id: uuidv4(),
+      odp: myOdp,
+      nickname: user.nickname,
+      content: filterProfanity(content),
+      timestamp: Date.now()
+    });
+    
+    saveJSON(momentsFile, allMoments);
+    io.emit('moments:updated', moment);
+  });
+
+  socket.on('moments:delete', (data) => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const user = registeredUsers[myOdp];
+    const { momentId } = data;
+    
+    const momentIndex = allMoments.findIndex(m => m.id === momentId);
+    if (momentIndex === -1) return;
+    
+    const moment = allMoments[momentIndex];
+    
+    // Only owner or admin can delete
+    const hasAdminPerm = hasPermission(user, 'manage_users');
+    if (moment.odp !== myOdp && !hasAdminPerm) {
+      return socket.emit('moments:error', { message: 'No permission to delete this moment' });
+    }
+    
+    allMoments.splice(momentIndex, 1);
+    saveJSON(momentsFile, allMoments);
+    io.emit('moments:deleted', { momentId });
+  });
+
+  // ===== Game System =====
+  
+  // Send game invite
+  socket.on('game:invite', (data) => {
+    const fromOdp = onlineSockets.get(socket.id);
+    if (!fromOdp) return;
+    
+    const { to, gameType } = data;
+    const toSocketId = userSockets.get(to);
+    
+    if (!toSocketId) {
+      return socket.emit('game:error', { message: 'The other party is not online' });
+    }
+    
+    const gameId = uuidv4();
+    activeGames[gameId] = {
+      id: gameId,
+      type: gameType,
+      players: [fromOdp, to],
+      host: fromOdp,
+      state: 'waiting',
+      createdAt: Date.now()
+    };
+    
+    const fromUser = registeredUsers[fromOdp];
+    
+    io.to(toSocketId).emit('game:invited', {
+      gameId,
+      from: fromOdp,
+      fromInfo: getUserPublicInfo(fromUser),
+      gameType
+    });
+    
+    console.log(`[Game] ${fromUser.nickname} invited ${registeredUsers[to]?.nickname} to play ${gameType}`);
+  });
+  
+  // Accept game invite
+  socket.on('game:accept', (data) => {
+    const { gameId, from } = data;
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const game = activeGames[gameId];
+    if (!game || game.state !== 'waiting') {
+      return socket.emit('game:error', { message: 'Game does not exist or has started' });
+    }
+    
+    game.state = 'playing';
+    
+    // Notify both parties game started
+    const hostSocketId = userSockets.get(game.host);
+    const guestSocketId = userSockets.get(myOdp);
+    
+    if (hostSocketId) {
+      io.to(hostSocketId).emit('game:start', { gameId, opponent: myOdp });
+    }
+    if (guestSocketId) {
+      io.to(guestSocketId).emit('game:start', { gameId, opponent: game.host });
+    }
+    
+    console.log(`[Game] ${registeredUsers[myOdp]?.nickname} accepted game invite, game started`);
+  });
+  
+  // Reject game invite
+  socket.on('game:decline', (data) => {
+    const { gameId, from } = data;
+    
+    const game = activeGames[gameId];
+    if (game) {
+      const hostSocketId = userSockets.get(game.host);
+      if (hostSocketId) {
+        io.to(hostSocketId).emit('game:declined');
+      }
+      delete activeGames[gameId];
+    }
+  });
+  
+  // Game move
+  socket.on('game:move', (data) => {
+    const { gameId, move } = data;
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const game = activeGames[gameId];
+    if (!game) return;
+    
+    // Find opponent
+    const opponentOdp = game.players.find(p => p !== myOdp);
+    const opponentSocketId = userSockets.get(opponentOdp);
+    
+    if (opponentSocketId) {
+      // Handle guess number game special logic
+      if (game.type === 'guess' && move.action === 'guess' && game.targetNumber !== undefined) {
+        let result;
+        if (move.guess === game.targetNumber) {
+          result = 'correct';
+        } else if (move.guess > game.targetNumber) {
+          result = 'high';
+        } else {
+          result = 'low';
+        }
+        
+        // Send result to guesser
+        socket.emit('game:move', { move: { action: 'result', guess: move.guess, result } });
+        // Send guess to number setter
+        io.to(opponentSocketId).emit('game:move', { move: { action: 'guess', guess: move.guess } });
+      } else if (game.type === 'guess' && move.action === 'setNumber') {
+        game.targetNumber = move.number;
+        io.to(opponentSocketId).emit('game:move', { move });
+      } else {
+        io.to(opponentSocketId).emit('game:move', { move });
+      }
+    }
+  });
+  
+  // Leave game
+  socket.on('game:leave', (data) => {
+    const { gameId } = data;
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const game = activeGames[gameId];
+    if (game) {
+      const opponentOdp = game.players.find(p => p !== myOdp);
+      const opponentSocketId = userSockets.get(opponentOdp);
+      
+      if (opponentSocketId) {
+        io.to(opponentSocketId).emit('game:left');
+      }
+      
+      delete activeGames[gameId];
+    }
+  });
+
+  // ===== Report User =====
+  socket.on('report:user', (data) => {
+    const reporterOdp = onlineSockets.get(socket.id);
+    if (!reporterOdp) return;
+    
+    const { targetOdp, reason, messageId, chatId } = data;
+    if (!targetOdp || !reason) {
+      return socket.emit('report:error', { message: 'Please provide report reason' });
+    }
+    
+    const reporter = registeredUsers[reporterOdp];
+    const target = registeredUsers[targetOdp];
+    
+    if (!target) {
+      return socket.emit('report:error', { message: 'User does not exist' });
+    }
+    
+    const report = {
+      id: uuidv4(),
+      reporterOdp,
+      reporterName: reporter?.nickname,
+      targetOdp,
+      targetName: target?.nickname,
+      reason,
+      messageId,
+      chatId,
+      status: 'pending', // pending, handled, dismissed
+      createdAt: Date.now()
+    };
+    
+    reports.push(report);
+    saveJSON(reportsFile, reports);
+    
+    // Notify admins
+    notifyAdmins('report:new', report);
+    
+    socket.emit('report:success', { message: 'Report submitted, admin will handle soon' });
+    console.log(`[Report] ${reporter?.nickname} reported ${target?.nickname}: ${reason}`);
+  });
+
+  // ===== Admin Get Report List =====
+  socket.on('admin:getReports', () => {
+    const myOdp = onlineSockets.get(socket.id);
+    if (!myOdp) return;
+    
+    const user = registeredUsers[myOdp];
+    if (!hasPermission(user, 'view_reports')) {
+      return socket.emit('admin:error', { message: 'No permission to view reports' });
+    }
+    
+    socket.emit('admin:reports', reports.filter(r => r.status === 'pending'));
+  });
+
+  // ===== Admin Handle Report =====
+  socket.on('admin:handleReport', (data) => {
+    const adminOdp = onlineSockets.get(socket.id);
+    if (!adminOdp) return;
+    
+    const admin = registeredUsers[adminOdp];
+    if (!hasPermission(admin, 'view_reports')) {
+      return socket.emit('admin:error', { message: 'No permission to handle reports' });
+    }
+    
+    const { reportId, action, muteMinutes, reason } = data;
+    const report = reports.find(r => r.id === reportId);
+    
+    if (!report) {
+      return socket.emit('admin:error', { message: 'Report does not exist' });
+    }
+    
+    report.status = 'handled';
+    report.handledBy = adminOdp;
+    report.handledAt = Date.now();
+    report.action = action;
+    
+    if (action === 'warn') {
+      // Warn user
+      warnUser(report.targetOdp, reason || report.reason, adminOdp);
+    } else if (action === 'mute') {
+      // Mute user
+      const until = Date.now() + (muteMinutes || 30) * 60 * 1000;
+      bans.muted[report.targetOdp] = {
+        by: adminOdp,
+        reason: reason || report.reason,
+        until,
+        permanent: false
+      };
+      saveJSON(bansFile, bans);
+      
+      const targetSocketId = userSockets.get(report.targetOdp);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('user:muted', {
+          reason: reason || report.reason,
+          duration: `${muteMinutes || 30}minutes`,
+          permanent: false
+        });
+      }
+    }
+    
+    saveJSON(reportsFile, reports);
+    socket.emit('admin:reportHandled', { reportId, action });
+  });
+
+  // ===== Admin Warn User =====
+  socket.on('admin:warnUser', (data) => {
+    const adminOdp = onlineSockets.get(socket.id);
+    if (!adminOdp) return;
+    
+    const admin = registeredUsers[adminOdp];
+    if (!hasPermission(admin, 'mute')) {
+      return socket.emit('admin:error', { message: 'No permission to warn users' });
+    }
+    
+    const { targetOdp, reason } = data;
+    if (!targetOdp || !reason) return;
+    
+    warnUser(targetOdp, reason, adminOdp);
+    socket.emit('admin:warnSuccess', { message: 'Warning sent' });
+  });
+
+  // ===== Admin Mute User =====
+  socket.on('admin:muteUser', (data) => {
+    const adminOdp = onlineSockets.get(socket.id);
+    if (!adminOdp) return;
+    
+    const admin = registeredUsers[adminOdp];
+    if (!hasPermission(admin, 'mute')) {
+      return socket.emit('admin:error', { message: 'No permission to mute users' });
+    }
+    
+    const { targetOdp, minutes, reason } = data;
+    const target = registeredUsers[targetOdp];
+    
+    if (!target) {
+      return socket.emit('admin:error', { message: 'User does not exist' });
+    }
+    
+    // Cannot mute users with higher level
+    const adminRole = getRoleInfo(admin.role);
+    const targetRole = getRoleInfo(target.role);
+    if (targetRole.level >= adminRole.level) {
+      return socket.emit('admin:error', { message: 'Cannot mute users of same or higher level' });
+    }
+    
+    const until = Date.now() + (minutes || 30) * 60 * 1000;
+    bans.muted[targetOdp] = {
+      by: adminOdp,
+      reason: reason || 'Violation of chat rules',
+      until,
+      permanent: false
+    };
+    saveJSON(bansFile, bans);
+    
+    const targetSocketId = userSockets.get(targetOdp);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('user:muted', {
+        reason: reason || 'Violation of chat rules',
+        duration: `${minutes || 30}minutes`,
+        permanent: false
+      });
+    }
+    
+    socket.emit('admin:muteSuccess', { message: `Muted ${target.nickname} ${minutes || 30}minutes` });
+    console.log(`[Mute] ${admin.nickname} muted ${target.nickname} ${minutes || 30}minutes`);
+  });
+
+  // ===== Admin Unmute User =====
+  socket.on('admin:unmuteUser', (data) => {
+    const adminOdp = onlineSockets.get(socket.id);
+    if (!adminOdp) return;
+    
+    const admin = registeredUsers[adminOdp];
+    if (!hasPermission(admin, 'mute')) {
+      return socket.emit('admin:error', { message: 'No permission to unmute users' });
+    }
+    
+    const { targetOdp } = data;
+    delete bans.muted[targetOdp];
+    saveJSON(bansFile, bans);
+    
+    const targetSocketId = userSockets.get(targetOdp);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('user:unmuted');
+    }
+    
+    socket.emit('admin:unmuteSuccess', { message: 'Unmuted successfully' });
+  });
+
+  // ===== Disconnect =====
+  socket.on('disconnect', () => {
+    const odp = onlineSockets.get(socket.id);
+    if (odp) {
+      const user = registeredUsers[odp];
+      if (user) {
+        console.log(`[Offline] ${user.nickname}`);
+        socket.broadcast.emit('user:offline', { odp });
+      }
+      onlineSockets.delete(socket.id);
+      userSockets.delete(odp);
+    }
+  });
+});
+
+// ===== Admin Backend =====
+const adminApp = express();
+const adminServer = http.createServer(adminApp);
+
+adminApp.use(express.json());
+adminApp.use(express.static(adminDir));
+
+function localOnly(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress;
+  const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  if (!isLocal) {
+    return res.status(403).json({ error: 'Local access only' });
+  }
+  next();
+}
+
+adminApp.use(localOnly);
+
+adminApp.get('/api/stats', (req, res) => {
+  res.json({
+    users: Object.keys(registeredUsers).length,
+    online: userSockets.size,
+    rooms: Object.keys(allRooms).length,
+    messages: Object.values(allMessages).reduce((sum, msgs) => sum + msgs.length, 0),
+    banned: Object.keys(bans.banned).length,
+    muted: Object.keys(bans.muted).length
+  });
+});
+
+adminApp.get('/api/users', (req, res) => {
+  const users = Object.values(registeredUsers).map(u => ({
+    odp: u.odp,
+    username: u.username,
+    nickname: u.nickname,
+    role: u.role,
+    roleInfo: getRoleInfo(u.role),
+    createdAt: u.createdAt,
+    online: userSockets.has(u.odp),
+    banned: bans.banned[u.odp] || null,
+    muted: bans.muted[u.odp] || null
+  }));
+  res.json(users);
+});
+
+adminApp.get('/api/messages', (req, res) => {
+  const { chatId, limit = 100 } = req.query;
+  if (chatId) {
+    const messages = allMessages[chatId] || [];
+    res.json(messages.slice(-parseInt(limit)));
+  } else {
+    const allChats = Object.entries(allMessages).map(([id, msgs]) => ({
+      chatId: id,
+      messageCount: msgs.length,
+      lastMessage: msgs[msgs.length - 1]
+    }));
+    res.json(allChats);
+  }
+});
+
+adminApp.get('/api/rooms', (req, res) => {
+  res.json(Object.values(allRooms));
+});
+
+adminApp.post('/api/ban', (req, res) => {
+  const { odp, reason, duration, permanent } = req.body;
+  
+  if (!odp || !registeredUsers[odp]) {
+    return res.status(400).json({ error: 'User does not exist' });
+  }
+  
+  if (registeredUsers[odp].role === 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'Cannot ban super admin' });
+  }
+  
+  bans.banned[odp] = {
+    reason: reason || 'Violation of rules',
+    permanent: !!permanent,
+    until: permanent ? null : new Date(Date.now() + (duration || 86400000)).toISOString(),
+    createdAt: new Date().toISOString()
+  };
+  saveJSON(bansFile, bans);
+  
+  const socketId = userSockets.get(odp);
+  if (socketId) {
+    const socket = io.sockets.sockets.get(socketId);
+    if (socket) {
+      socket.emit('force:logout', { message: `Your account has been banned, reason: ${reason || 'Violation of rules'}` });
+      socket.disconnect();
+    }
+  }
+  
+  console.log(`[Ban] ${registeredUsers[odp].nickname} - ${reason || 'Violation of rules'}`);
+  res.json({ success: true });
+});
+
+adminApp.post('/api/unban', (req, res) => {
+  const { odp } = req.body;
+  delete bans.banned[odp];
+  saveJSON(bansFile, bans);
+  console.log(`[Unban] ${registeredUsers[odp]?.nickname}`);
+  res.json({ success: true });
+});
+
+adminApp.post('/api/mute', (req, res) => {
+  const { odp, reason, duration, permanent } = req.body;
+  
+  if (!odp || !registeredUsers[odp]) {
+    return res.status(400).json({ error: 'User does not exist' });
+  }
+  
+  if (registeredUsers[odp].role === 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'Cannot mute super admin' });
+  }
+  
+  bans.muted[odp] = {
+    reason: reason || 'Violation of rules',
+    permanent: !!permanent,
+    until: permanent ? null : new Date(Date.now() + (duration || 3600000)).toISOString(),
+    createdAt: new Date().toISOString()
+  };
+  saveJSON(bansFile, bans);
+  
+  const socketId = userSockets.get(odp);
+  if (socketId) {
+    io.to(socketId).emit('user:muted', bans.muted[odp]);
+  }
+  
+  console.log(`[Mute] ${registeredUsers[odp].nickname} - ${reason || 'Violation of rules'}`);
+  res.json({ success: true });
+});
+
+adminApp.post('/api/unmute', (req, res) => {
+  const { odp } = req.body;
+  delete bans.muted[odp];
+  saveJSON(bansFile, bans);
+  
+  const socketId = userSockets.get(odp);
+  if (socketId) {
+    io.to(socketId).emit('user:unmuted');
+  }
+  
+  console.log(`[Unmute] ${registeredUsers[odp]?.nickname}`);
+  res.json({ success: true });
+});
+
+adminApp.post('/api/setRole', (req, res) => {
+  const { odp, role } = req.body;
+  
+  if (!odp || !registeredUsers[odp]) {
+    return res.status(400).json({ error: 'User does not exist' });
+  }
+  
+  if (registeredUsers[odp].role === 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'Cannot modify super admin role' });
+  }
+  
+  if (role === 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'Cannot set as super admin' });
+  }
+  
+  if (!ROLES[role] && !customRoles[role]) {
+    return res.status(400).json({ error: 'Role does not exist' });
+  }
+  
+  registeredUsers[odp].role = role;
+  saveJSON(usersFile, registeredUsers);
+  
+  const socketId = userSockets.get(odp);
+  if (socketId) {
+    io.to(socketId).emit('user:roleChanged', {
+      role: role,
+      roleInfo: getRoleInfo(role)
+    });
+  }
+  
+  console.log(`[Role Change] ${registeredUsers[odp].nickname} -> ${role}`);
+  res.json({ success: true });
+});
+
+// Modify user password
+adminApp.post('/api/changePassword', (req, res) => {
+  const { odp, newPassword } = req.body;
+  
+  if (!odp || !registeredUsers[odp]) {
+    return res.status(400).json({ error: 'User does not exist' });
+  }
+  
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+  
+  registeredUsers[odp].password = hashPassword(newPassword);
+  saveJSON(usersFile, registeredUsers);
+  
+  // Force user to re-login
+  const socketId = userSockets.get(odp);
+  if (socketId) {
+    io.to(socketId).emit('force:logout', { message: 'Your password has been changed by admin, please re-login' });
+  }
+  
+  console.log(`[Password Changed] ${registeredUsers[odp].nickname} password has been changed by admin`);
+  res.json({ success: true, message: `Changed ${registeredUsers[odp].nickname} 's password` });
+});
+
+adminApp.get('/api/roles', (req, res) => {
+  res.json({ builtIn: ROLES, custom: customRoles });
+});
+
+adminApp.post('/api/roles/create', (req, res) => {
+  const { name, color, badge, level, permissions } = req.body;
+  
+  if (!name || ROLES[name] || customRoles[name]) {
+    return res.status(400).json({ error: 'Invalid role name or already exists' });
+  }
+  
+  customRoles[name] = {
+    name,
+    color: color || '#666666',
+    badge: badge || '',
+    level: level || 10,
+    permissions: permissions || []
+  };
+  saveJSON(customRolesFile, customRoles);
+  
+  res.json({ success: true, role: customRoles[name] });
+});
+
+adminApp.delete('/api/roles/:name', (req, res) => {
+  const { name } = req.params;
+  
+  if (ROLES[name]) {
+    return res.status(400).json({ error: 'Cannot delete built-in roles' });
+  }
+  
+  if (!customRoles[name]) {
+    return res.status(404).json({ error: 'Role does not exist' });
+  }
+  
+  Object.values(registeredUsers).forEach(user => {
+    if (user.role === name) {
+      user.role = 'USER';
+    }
+  });
+  saveJSON(usersFile, registeredUsers);
+  
+  delete customRoles[name];
+  saveJSON(customRolesFile, customRoles);
+  
+  res.json({ success: true });
+});
+
+// Delete user
+adminApp.delete('/api/users/:odp', (req, res) => {
+  const { odp } = req.params;
+  
+  if (!registeredUsers[odp]) {
+    return res.status(404).json({ error: 'User does not exist' });
+  }
+  
+  if (registeredUsers[odp].role === 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'Cannot delete super admin' });
+  }
+  
+  // Kick online user
+  const socketId = userSockets.get(odp);
+  if (socketId) {
+    const socket = io.sockets.sockets.get(socketId);
+    if (socket) {
+      socket.emit('force:logout', { message: 'Your account has been deleted' });
+      socket.disconnect();
+    }
+    userSockets.delete(odp);
+  }
+  
+  const username = registeredUsers[odp].username;
+  const nickname = registeredUsers[odp].nickname;
+  
+  // Delete user data
+  delete registeredUsers[odp];
+  saveJSON(usersFile, registeredUsers);
+  
+  // Delete friend relationships
+  delete friends[odp];
+  Object.keys(friends).forEach(key => {
+    friends[key] = (friends[key] || []).filter(f => f !== odp);
+  });
+  saveJSON(friendsFile, friends);
+  
+  // Delete friend requests
+  delete friendRequests[odp];
+  saveJSON(friendRequestsFile, friendRequests);
+  
+  // Delete ban/mute records
+  delete bans.banned[odp];
+  delete bans.muted[odp];
+  saveJSON(bansFile, bans);
+  
+  // Remove from groups
+  Object.values(allRooms).forEach(room => {
+    room.members = room.members.filter(m => m !== odp);
+    room.admins = (room.admins || []).filter(a => a !== odp);
+    // If owner, transfer to first member or delete group
+    if (room.owner === odp) {
+      if (room.members.length > 0) {
+        room.owner = room.members[0];
+      } else {
+        delete allRooms[room.id];
+      }
+    }
+  });
+  saveJSON(roomsFile, allRooms);
+  
+  console.log(`[Delete User] ${nickname} (${username})`);
+  res.json({ success: true });
+});
+
+// ===== Start Server =====
+initSuperAdmin();
+
+server.listen(PORT, '0.0.0.0', () => {
+  const localIP = getLocalIP();
+  console.log('\n========================================');
+  console.log('🚀 Chat room server started!');
+  console.log('========================================');
+  console.log(`📍 Local Admin access: http://127.0.0.1:${PORT}`);
+  console.log(`📍 LAN access: http://${localIP}:${PORT}`);
+  console.log('========================================');
+  console.log(`📁 Data directory: ${dataDir}`);
+  console.log(`👥 Registered users: ${Object.keys(registeredUsers).length}`);
+  console.log(`💬 Group chats: ${Object.keys(allRooms).length}`);
+  console.log('========================================\n');
+});
+
+adminServer.listen(ADMIN_PORT, '127.0.0.1', () => {
+  console.log('========================================');
+  console.log('🔐 Admin panel started!');
+  console.log('========================================');
+  console.log(`📍 Admin panel: http://127.0.0.1:${ADMIN_PORT}`);
+  console.log('⚠️  Can only access via 127.0.0.1 access');
+  console.log('========================================\n');
+});
