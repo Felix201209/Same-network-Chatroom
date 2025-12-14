@@ -233,17 +233,18 @@ The system includes an automatic profanity filter that works in the background:
 
 ### Warning System
 
-Admins can issue warnings to users for minor infractions:
+Admins can issue warnings to users for minor infractions through the chat interface. The warning system helps track user behavior and provides graduated moderation.
 
-**In-Chat Warning** (requires socket connection):
-```javascript
-// Admins can warn users through the chat interface
-// Warnings are tracked and can lead to automatic mutes
-```
+**How warnings work**:
+- Admins can send warnings to users through the real-time chat connection
+- Each warning is logged with the reason, admin who issued it, and timestamp
+- Warnings are tracked per user in the system
+- Warning history is stored in `/data/warnings.json`
 
 **Automatic escalation**:
 - 3+ warnings within a short period may trigger automatic temporary mute
-- Warning history is stored per user
+- This provides a graduated response to repeated minor violations
+- Admins can view a user's warning history when making moderation decisions
 
 ### Monitoring Active Users
 
