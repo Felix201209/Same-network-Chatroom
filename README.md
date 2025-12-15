@@ -15,6 +15,18 @@ This project provides a simple solution:
 ✅ Works on laptops, desktops, Raspberry Pi, etc.  
 ✅ Perfect for classrooms, group work, LAN parties, and offline communication
 
+## 🙌 Thanks / Contributors
+
+感谢以下同学帮助测试和反馈 Bug：
+
+- Leo Guo @24080006117-ops — 发现并反馈了多个关键 Bug
+
+## 🙌 Thanks / Contributors
+
+Special thanks to the following contributors for helping test the project and report bugs:
+
+- Leo Guo @24080006117-ops — Discovered and reported several critical bugs
+
 ---
 
 ## 🚀 Getting Started
