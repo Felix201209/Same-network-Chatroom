@@ -28,13 +28,21 @@ git clone https://github.com/Felix201209/Same-network-Chatroom
 # Enter the project folder
 cd your_path/Chatroom_Github
 
-# Download Homebrew
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
-eval "$(/opt/homebrew/bin/brew shellenv)"
+# Download and install nvm:
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
 
-# Or use Tsinghua for China Mainland Users
-/bin/bash -c "$(curl -fsSL https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/install.sh)"
+# in lieu of restarting the shell
+\. "$HOME/.nvm/nvm.sh"
+
+# Download and install Node.js:
+nvm install 25
+
+# Verify the Node.js version:
+node -v # Should print "v25.2.1".
+
+# Verify npm version:
+npm -v # Should print "11.6.2".
+
 
 
 # Check Homebrew Version
