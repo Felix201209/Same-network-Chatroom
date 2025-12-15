@@ -27,7 +27,14 @@ git clone https://github.com/Felix201209/Same-network-Chatroom
 
 # Enter the project folder
 cd your_path/Chatroom_Github
+```
 
+```bash
+#Install Xcode if you are using a mac
+xcode-select --install
+```
+
+```bash
 # Download and install nvm:
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
 
@@ -42,18 +49,9 @@ node -v # Should print "v25.2.1".
 
 # Verify npm version:
 npm -v # Should print "11.6.2".
+```
 
-
-
-# Check Homebrew Version
-brew -v
-
-# Download Node.js
-brew install node
-
-# Check if Node.js is correctly downloaded
-node -v
-npm -v
+```bash
 
 # Clean Ports
 npm run clean
