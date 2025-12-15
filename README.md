@@ -33,6 +33,10 @@ cd your_path/Chatroom_Github
 echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
 eval "$(/opt/homebrew/bin/brew shellenv)"
 
+# Or use Tsinghua for China Mainland Users
+/bin/bash -c "$(curl -fsSL https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/install.sh)"
+
+
 # Check Homebrew Version
 brew -v
 
