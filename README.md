@@ -23,7 +23,7 @@ Follow the steps below to run the project:
 
 ```bash
 # Clone the repository (optional)
-git clone https://github.com/yourname/Chatroom_Github.git
+git clone https://github.com/Felix201209/Same-network-Chatroom
 
 # Enter the project folder
 cd your_path/Chatroom_Github
