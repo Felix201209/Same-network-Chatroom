@@ -47,20 +47,13 @@ xcode-select --install
 ```
 
 ```bash
-# Download and install nvm:
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
-
-# in lieu of restarting the shell
-\. "$HOME/.nvm/nvm.sh"
-
 # Download and install Node.js:
-nvm install 24
+# For Mac Silicon:
+https://nodejs.org/dist/v24.12.0/node-v24.12.0.pkg
 
-# Verify the Node.js version:
-node -v # Should print "v24.12.0".
+#Other Devices see this site (recommand download rebuilt under the bash):
+https://nodejs.org/en/download
 
-# Verify npm version:
-npm -v # Should print "11.6.2".
 
 ```
 
