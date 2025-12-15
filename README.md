@@ -28,6 +28,11 @@ git clone https://github.com/yourname/Chatroom_Github.git
 # Enter the project folder
 cd your_path/Chatroom_Github
 
+# Download Node.js
+curl -O https://nodejs.org/dist/latest-v18.x/node-v18.19.0.pkg
+sudo installer -pkg node-v18.19.0.pkg -target /
+
+
 # Install dependencies if the given one have errors
 npm install
 
