@@ -28,13 +28,20 @@ git clone https://github.com/yourname/Chatroom_Github.git
 # Enter the project folder
 cd your_path/Chatroom_Github
 
+# Download Homebrew
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
+eval "$(/opt/homebrew/bin/brew shellenv)"
+
+# Check Homebrew Version
+brew -v
+
 # Download Node.js
-curl -O https://nodejs.org/dist/latest-v18.x/node-v18.19.0.pkg
-sudo installer -pkg node-v18.19.0.pkg -target /
+brew install node
 
-
-# Install dependencies if the given one have errors
-npm install
+# Check if Node.js is correctly downloaded
+node -v
+npm -v
 
 # Clean Ports
 npm run clean
