@@ -66,7 +66,7 @@ npm run clean
 npm start
 ```
 
-The project is **currently in BETA**, so updates and improvements are ongoing.
+The project is **has officially been released**, so updates and improvements are not ongoing unless many people ask for this.
 
 ---
 
